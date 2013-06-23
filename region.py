@@ -43,7 +43,7 @@ class Region:
     t_srs = "+proj=aea +datum=NAD83 +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +units=m"
 
     # raster layer order
-    rasters = {'landcover': 1, 'elevation': 2, 'bathy': 3, 'crust': 4}
+    rasters = {'landcover': 1, 'elevation': 2, 'bathy': 3, 'crust': 4, 'orthor': 5, 'orthog': 6, 'orthob': 7, 'orthoa': 8}
     
     # default values
     tilesize = 256
@@ -53,13 +53,15 @@ class Region:
     sealevel = 64
     maxdepth = 32
 
-    # tileheight is height of map in Minecraft units
+    # tileheight is height of map in Minecraft units TODO XXX CHANGE
     tileheight = mclevel.MCInfdevOldLevel.Height
+
     # headroom is room between top of terrain and top of map
     headroom = 16
 
     # product types in order of preference
-    productIDs = { 'elevation': ['N3F', 'N2F', 'N1F'],
+    productIDs = { 'ortho': ['ONF', 'OF9', 'P10', 'P11', 'P12', 'P13', 'P14', 'P15', 'P16', 'P17', 'P18', 'P19'],
+                   'elevation': ['N3F', 'N2F', 'N1F'],
                    'landcover': sorted(Terrain.translate.keys()) }
     # file suffix for extraction
     # FIXME: check N2F value
@@ -69,7 +71,7 @@ class Region:
     downloadtop = os.path.abspath('Downloads')
     regiontop = os.path.abspath('Regions')
 
-    def __init__(self, name, xmax, xmin, ymax, ymin, tilesize=None, scale=None, vscale=None, trim=None, sealevel=None, maxdepth=None, lcIDs=None, elIDs=None, doOre=True, doSchematics=False):
+    def __init__(self, name, xmax, xmin, ymax, ymin, tilesize=None, scale=None, vscale=None, trim=None, sealevel=None, maxdepth=None, oiIDs=None, lcIDs=None, elIDs=None, doOre=True, doSchematics=False):
         """Create a region based on lat-longs and other parameters."""
         # NB: smart people check names
         self.name = name
@@ -123,6 +125,13 @@ class Region:
             self.productIDs['elevation'].remove('N3F')
 
         # specified IDs must be in region list
+        if oiIDs == None:
+            orthoIDs = self.productIDs['ortho']
+        else:
+            orthoIDs = [ ID for ID in oiIDs if ID in self.productIDs['ortho'] ]
+            if orthoIDs == []:
+                raise AttributeError, 'invalid ortho ID'
+
         if lcIDs == None:
             landcoverIDs = self.productIDs['landcover']
         else:
@@ -182,16 +191,17 @@ class Region:
         realsize = self.scale * self.tilesize
         self.tiles = { 'xmax': int(ceil(mxmax / realsize)), 'xmin': int(floor(mxmin / realsize)), 'ymax': int(ceil(mymax / realsize)), 'ymin': int(floor(mymin / realsize)) }
 
-        self.albersextents = { 'landcover': dict(), 'elevation': dict() }
-        self.wgs84extents = { 'landcover': dict(), 'elevation': dict() }
+        self.albersextents = { 'ortho': dict(), 'landcover': dict(), 'elevation': dict() }
+        self.wgs84extents = { 'ortho': dict(), 'landcover': dict(), 'elevation': dict() }
 
         # landcover has a maxdepth-sized border
         self.albersextents['elevation'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
         borderwidth = self.maxdepth * self.scale
         self.albersextents['landcover'] = { 'xmax': self.albersextents['elevation']['xmax'] + borderwidth, 'xmin': self.albersextents['elevation']['xmin'] - borderwidth, 'ymax': self.albersextents['elevation']['ymax'] + borderwidth, 'ymin': self.albersextents['elevation']['ymin'] - borderwidth }
+        self.albersextents['ortho'] = { 'xmax': self.albersextents['elevation']['xmax'] + borderwidth, 'xmin': self.albersextents['elevation']['xmin'] - borderwidth, 'ymax': self.albersextents['elevation']['ymax'] + borderwidth, 'ymin': self.albersextents['elevation']['ymin'] - borderwidth }
 
         # now convert back from Albers to WGS84
-        for maptype in ['landcover', 'elevation']:
+        for maptype in ['ortho', 'landcover', 'elevation']:
             ULdict = {'X_Value': self.albersextents[maptype]['xmin'], 'Y_Value': self.albersextents[maptype]['ymin'], 'Current_Coordinate_System': Region.albers, 'Target_Coordinate_System': Region.wgs84}
             (ULx, ULy) = re.findall(Convre, clientConv.service.getCoordinates(**ULdict))[0]
             URdict = {'X_Value': self.albersextents[maptype]['xmax'], 'Y_Value': self.albersextents[maptype]['ymin'], 'Current_Coordinate_System': Region.albers, 'Target_Coordinate_System': Region.wgs84}
@@ -207,6 +217,7 @@ class Region:
             self.wgs84extents[maptype] = { 'xmax': max(xfloat), 'xmin': min(xfloat), 'ymax': max(yfloat), 'ymin': min(yfloat) }
 
         # check availability of product IDs and identify specific layer IDs
+        self.oilayer = self.checkavail(orthoIDs, 'ortho')
         self.lclayer = self.checkavail(landcoverIDs, 'landcover')
         self.ellayer = self.checkavail(elevationIDs, 'elevation')
 
@@ -216,7 +227,7 @@ class Region:
         stream.close()
 
     def layertype(self, layerID):
-        """Return 'elevation' or 'landcover' depending on layerID."""
+        """Return 'elevation' or 'landcover' or 'ortho' depending on layerID."""
         return [key for key in self.productIDs.keys() if layerID in self.productIDs[key]][0]
         
     def checkavail(self, productlist, maptype):
@@ -242,18 +253,22 @@ class Region:
         rAatts = clientInv.service.return_Attributes(**rAdict)
         # store offered products in a list
         offered = []
+        options = []
         # this returns an array of custom attributes
         # which is apparently a ball full of crazy
         # NB: clean up this [0][0] crap!
         for elem in rAatts.ArrayOfCustomAttributes:
-            if (elem[0][0][0] == 'PRODUCTKEY' and elem[0][0][1] in productlist and
+            if (elem[0][0][0] == 'PRODUCTKEY' and
                 elem[0][1][0] == 'STATUS' and elem[0][1][1] == 'Tiled'):
-                offered.append(elem[0][0][1])
+                if elem[0][0][1] in productlist:
+                    offered.append(elem[0][0][1])
+                options.append(elem[0][0][1])
         # this should extract the first
         try:
             productID = [ ID for ID in productlist if ID in offered ][0]
         except IndexError:
-            raise AttributeError, "No products are available for this location!"
+            raise AttributeError, "No products among (%s) are available for this location (options were %s)!" % \
+                                  (", ".join(productlist), ", ".join(options))
         return productID
 
     def requestvalidation(self, layerIDs):
@@ -355,6 +370,8 @@ class Region:
         layertype = self.layertype(layerID)
         if layertype == 'elevation':
             extractfiles = [os.path.join(extracthead, '.'.join(['float%s_%s' % (extracthead, Region.exsuf[layerID]), suffix])) for suffix in 'flt', 'hdr', 'prj']
+        elif layertype == 'ortho':
+            extractfiles = ['.'.join([extracthead, suffix]) for suffix in 'tif', 'tfw']
         else: # if layertype == 'landcover':
             extractfiles = ['.'.join([extracthead, suffix]) for suffix in 'tif', 'tfw']
         for extractfile in extractfiles:
@@ -366,14 +383,16 @@ class Region:
 
     def getfiles(self):
         """Get files from USGS and extract them if necessary."""
-        layerIDs = [self.lclayer, self.ellayer]
+        layerIDs = [self.oilayer, self.lclayer, self.ellayer]
         downloadURLs = self.requestvalidation(layerIDs)
         for layerID in downloadURLs.keys():
+            print "Downloading files for layer %s..." % layerID
             extractlist = []
             for downloadURL in downloadURLs[layerID]:
                 extractfile = self.retrievefile(layerID, downloadURL)
                 extractlist.append(extractfile)
             # Build VRTs
+            print "Building VRT file for layer %s (this may take some time)..." % layerID
             vrtfile = os.path.join(self.mapsdir, '%s.vrt' % layerID)
             buildvrtcmd = 'gdalbuildvrt "%s" %s' % (vrtfile, ' '.join(['"%s"' % os.path.abspath(extractfile) for extractfile in extractlist]))
             os.system('%s' % buildvrtcmd)
@@ -387,6 +406,7 @@ class Region:
 
         # warp elevation data into new format
         # NB: can't do this to landcover until mode algorithm is supported
+        print "Warping and storing elevation data..."
         eltif = os.path.join(self.mapsdir, '%s.tif' % (self.ellayer)) 
         elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
         elextents = self.albersextents['elevation']
@@ -453,7 +473,7 @@ class Region:
         self.vscale = int(max(oldvscale, minvscale))
 
         # GeoTIFF
-        # four bands: landcover, elevation, bathy, crust
+        # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
         # data type is GDT_Int16 (elevation can be negative)
         driver = gdal.GetDriverByName("GTiff")
         mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Int16)
@@ -477,6 +497,7 @@ class Region:
         newcrust = None
 
         # read landcover array
+        print "Warping and storing landcover and bathy data..."
         lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
         lcfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.lclayer))
         # here are the things that need to happen
@@ -532,11 +553,13 @@ class Region:
             lcband = lcds.GetRasterBand(1)
             # depth array is entire landcover region, landcover array is subset
             deptharray = lcband.ReadAsArray(0, 0, lcds.RasterXSize, lcds.RasterYSize)
+
         lcarray = deptharray[self.maxdepth:-1*self.maxdepth, self.maxdepth:-1*self.maxdepth]
         geotrans = [ lcextents['xmin'], self.scale, 0, lcextents['ymax'], 0, -1 * self.scale ]
         projection = srs.ExportToWkt()
         bathyarray = getBathy(deptharray, self.maxdepth, geotrans, projection)
         mapds.GetRasterBand(Region.rasters['bathy']).WriteArray(bathyarray)
+
         # perform terrain translation
         # NB: figure out why this doesn't work up above
         lcpid = self.lclayer[:3]
@@ -547,7 +570,46 @@ class Region:
             for value in numpy.unique(lcarray).flat:
                 if value not in Terrain.terdict:
                     print "bad value: ", value
+        print lcarray.shape
         mapds.GetRasterBand(Region.rasters['landcover']).WriteArray(lcarray)
+
+        # read ortho arrays
+        oitif = os.path.join(self.mapsdir, '%s.tif' % (self.oilayer)) 
+        oifile = os.path.join(self.mapsdir, '%s-new.tif' % (self.oilayer))
+        oiextents = self.albersextents['ortho']
+        warpcmd = 'gdalwarp -q -multi -t_srs "%s" -tr %d %d -te %d %d %d %d -r cubic "%s" "%s" -srcnodata "-340282346638529993179660072199368212480.000" -dstnodata 0' % (Region.t_srs, self.scale, self.scale, oiextents['xmin'], oiextents['ymin'], oiextents['xmax'], oiextents['ymax'], oitif, oifile)
+
+        try:
+            os.remove(oifile)
+        except OSError:
+            pass
+        # NB: make this work on Windows too!
+        os.system('%s' % warpcmd)
+
+        # 1. the new file must be read into arrays and flattened
+        tifds = gdal.Open(oifile, GA_ReadOnly)
+        tifgeotrans = tifds.GetGeoTransform()
+
+        xminarr = int((oiextents['xmin']-tifgeotrans[0])/tifgeotrans[1])
+        xmaxarr = int((oiextents['xmax']-tifgeotrans[0])/tifgeotrans[1])
+        yminarr = int((oiextents['ymax']-tifgeotrans[3])/tifgeotrans[5])
+        ymaxarr = int((oiextents['ymin']-tifgeotrans[3])/tifgeotrans[5])
+
+        for band in range(1,5):
+            print "Cropping and storing ortho data (%s band)..." % "-rgba"[band]
+            tifband = tifds.GetRasterBand(band)
+#            values = tifband.ReadAsArray(xminarr, yminarr, xmaxarr-xminarr, ymaxarr-yminarr)
+            values = tifband.ReadAsArray(0, 0, tifds.RasterXSize, tifds.RasterYSize)
+            tifnodata = tifband.GetNoDataValue()
+            if (tifnodata == None):
+                tifnodata = 0
+            values[values == tifnodata] = -1    #Signal missing
+            #values = values.flatten()
+            tifband = None
+
+            print values.shape
+            mapds.GetRasterBand(band+Region.rasters['orthor']).WriteArray(values)
+            values = None
 
         # close the dataset
         mapds = None

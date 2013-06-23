@@ -6,6 +6,15 @@ from region import Region
 import sys
 import argparse
 
+def checkOrthoIDs(string):
+    """Checks to see if the given product IDs are valid."""
+    givenIDs = string.split(',')
+    validIDs = [ ID for ID in givenIDs if ID in Region.productIDs['ortho'] ]
+    if validIDs == givenIDs:
+        return givenIDs
+    else:
+        raise argparse.ArgumentTypeError, 'ortho IDs invalid: %s' % string
+
 def checkElevationIDs(string):
     """Checks to see if the given product IDs are valid."""
     givenIDs = string.split(',')
@@ -30,6 +39,7 @@ def main():
     # ./GetRegion.py --name BlockIsland --ymax 41.2378 --ymin 41.1415 --xmin -71.6202 --xmax -71.5332
 
     # defaults
+    default_orthoIDs     = ','.join(Region.productIDs['ortho'])
     default_elevationIDs = ','.join(Region.productIDs['elevation'])
     default_landcoverIDs = ','.join(Region.productIDs['landcover'])
 
@@ -46,6 +56,7 @@ def main():
     parser.add_argument('--trim', type=int, help='trim value (default %d)' % Region.trim)
     parser.add_argument('--sealevel', type=int, help='sealevel value (default %d)' % Region.sealevel)
     parser.add_argument('--maxdepth', type=int, help='maxdepth value (default %d)' % Region.maxdepth)
+    parser.add_argument('--orthoIDs', default=default_orthoIDs, type=checkOrthoIDs, help='ordered list of product IDs (default %s)' % default_orthoIDs)
     parser.add_argument('--elevationIDs', default=default_elevationIDs, type=checkElevationIDs, help='ordered list of product IDs (default %s)' % default_elevationIDs)
     parser.add_argument('--landcoverIDs', default=default_landcoverIDs, type=checkLandcoverIDs, help='ordered list of product IDs (default %s)' % default_landcoverIDs)
     parser.add_argument('--disable-ore', action='store_false', dest='doOre', default=True, help='disable ore generation')
@@ -59,7 +70,7 @@ def main():
 
     # create the region
     print "Creating new region %s..." % args.name
-    myRegion = Region(name=args.name, xmax=args.xmax, xmin=args.xmin, ymax=args.ymax, ymin=args.ymin, scale=args.scale, vscale=args.vscale, trim=args.trim, tilesize=args.tilesize, sealevel=args.sealevel, maxdepth=args.maxdepth, lcIDs=args.landcoverIDs, elIDs=args.elevationIDs, doOre=args.doOre, doSchematics=args.doSchematics)
+    myRegion = Region(name=args.name, xmax=args.xmax, xmin=args.xmin, ymax=args.ymax, ymin=args.ymin, scale=args.scale, vscale=args.vscale, trim=args.trim, tilesize=args.tilesize, sealevel=args.sealevel, maxdepth=args.maxdepth, oiIDs=args.orthoIDs, lcIDs=args.landcoverIDs, elIDs=args.elevationIDs, doOre=args.doOre, doSchematics=args.doSchematics)
 
     print "Retrieving files..."
     myRegion.getfiles()
