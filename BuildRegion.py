@@ -113,6 +113,7 @@ def main():
         chunk.Blocks[chunk.Blocks == EndStoneID] = StoneID
 
     # tie up loose ends
+    world.setPlayerGameType(1)
     setspawnandsave(world, peak)
 
 if __name__ == '__main__':

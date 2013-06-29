@@ -10,13 +10,15 @@ import urlparse
 from progressbar import ProgressBar, Percentage, Bar, ETA, FileTransferSpeed
 import yaml
 import logging
+from time import sleep
+import tarfile
 logging.basicConfig(level=logging.INFO)
 from utils import cleanmkdir
 from terrain import Terrain
 from pymclevel import mclevel
 
 from osgeo import gdal, osr
-from osgeo.gdalconst import GDT_Int16, GA_ReadOnly
+from osgeo.gdalconst import GDT_Int16, GDT_Byte, GA_ReadOnly
 from bathy import getBathy
 from crust import Crust
 import numpy
@@ -60,9 +62,10 @@ class Region:
     headroom = 16
 
     # product types in order of preference
-    productIDs = { 'ortho': ['ONF', 'OF9', 'P10', 'P11', 'P12', 'P13', 'P14', 'P15', 'P16', 'P17', 'P18', 'P19'],
+    productIDs = { 'ortho': ['P10', 'P11', 'P12', 'P13', 'P14', 'P15', 'P16', 'P17', 'P18', 'P19', 'ONF', 'OF9'],
                    'elevation': ['N3F', 'N2F', 'N1F'],
                    'landcover': sorted(Terrain.translate.keys()) }
+    seamlessIDs = ['P10', 'P11', 'P12', 'P13', 'P14', 'P15', 'P16', 'P17', 'P18']
     # file suffix for extraction
     # FIXME: check N2F value
     exsuf = { 'N3F': '13', 'N2F': '12', 'N1F': '1' }
@@ -198,7 +201,7 @@ class Region:
         self.albersextents['elevation'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
         borderwidth = self.maxdepth * self.scale
         self.albersextents['landcover'] = { 'xmax': self.albersextents['elevation']['xmax'] + borderwidth, 'xmin': self.albersextents['elevation']['xmin'] - borderwidth, 'ymax': self.albersextents['elevation']['ymax'] + borderwidth, 'ymin': self.albersextents['elevation']['ymin'] - borderwidth }
-        self.albersextents['ortho'] = { 'xmax': self.albersextents['elevation']['xmax'] + borderwidth, 'xmin': self.albersextents['elevation']['xmin'] - borderwidth, 'ymax': self.albersextents['elevation']['ymax'] + borderwidth, 'ymin': self.albersextents['elevation']['ymin'] - borderwidth }
+        self.albersextents['ortho'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
 
         # now convert back from Albers to WGS84
         for maptype in ['ortho', 'landcover', 'elevation']:
@@ -258,8 +261,8 @@ class Region:
         # which is apparently a ball full of crazy
         # NB: clean up this [0][0] crap!
         for elem in rAatts.ArrayOfCustomAttributes:
-            if (elem[0][0][0] == 'PRODUCTKEY' and
-                elem[0][1][0] == 'STATUS' and elem[0][1][1] == 'Tiled'):
+            if elem[0][0][0] == 'PRODUCTKEY' and \
+               elem[0][1][0] == 'STATUS' and elem[0][1][1] in ['Tiled', 'Seamless']:
                 if elem[0][0][1] in productlist:
                     offered.append(elem[0][0][1])
                 options.append(elem[0][0][1])
@@ -270,6 +273,40 @@ class Region:
             raise AttributeError, "No products among (%s) are available for this location (options were %s)!" % \
                                   (", ".join(productlist), ", ".join(options))
         return productID
+
+    def pid2FullPid(self, productID):
+        # access the web service to check availability
+        wsdlInv = "http://ags.cr.usgs.gov/index_service/Index_Service_SOAP.asmx?WSDL"
+        clientInv = suds.client.Client(wsdlInv)
+
+        productdict = {'ProductIDs': productID}
+        doproducts = clientInv.service.return_Download_Options(**productdict) 
+        [doPID, doType, doOF, doCF, doMF] = [value for (key, value) in doproducts['DownloadOptions'][0]]
+
+        # assemble layerID
+        layerID = doPID
+        OFgood = [u'GeoTIFF']
+        MFgood = [u'HTML', u'ALL', u'FAQ', u'SGML', u'TXT', u'XML']
+        CFgood = [u'TGZ', u'ZIP']
+        OFdict = dict([reversed(pair.split('-')) for pair in doOF.split(',')])
+        CFdict = dict([reversed(pair.split('-')) for pair in doCF.split(',')])
+        MFdict = dict([reversed(pair.split('-')) for pair in doMF.split(',')])
+        OFfound = [OFdict[OFval] for OFval in OFgood if OFval in OFdict]
+        if OFfound:
+            layerID += OFfound[0]
+        else:
+            raise AttributeError, 'no acceptable output format found'
+        MFfound = [MFdict[MFval] for MFval in MFgood if MFval in MFdict]
+        if MFfound:
+            layerID += MFfound[0]
+        else:
+            raise AttributeError, 'no acceptable metadata format found'
+        CFfound = [CFdict[CFval] for CFval in CFgood if CFval in CFdict]
+        if CFfound:
+            layerID += CFfound[0]
+        else:
+            raise AttributeError, 'no acceptable compression format found'
+        return str(layerID)
 
     def requestvalidation(self, layerIDs):
         """Generates download URLs from layer IDs."""
@@ -283,14 +320,21 @@ class Region:
         for layerID in layerIDs:
             layertype = self.layertype(layerID)
             mapextents = self.wgs84extents[layertype]
-            xmlString = "<REQUEST_SERVICE_INPUT><AOI_GEOMETRY><EXTENT><TOP>%f</TOP><BOTTOM>%f</BOTTOM><LEFT>%f</LEFT><RIGHT>%f</RIGHT></EXTENT><SPATIALREFERENCE_WKID/></AOI_GEOMETRY><LAYER_INFORMATION><LAYER_IDS>%s</LAYER_IDS></LAYER_INFORMATION><CHUNK_SIZE>%d</CHUNK_SIZE><JSON></JSON></REQUEST_SERVICE_INPUT>" % (mapextents['ymax'], mapextents['ymin'], mapextents['xmin'], mapextents['xmax'], layerID, 250) # can be 100, 15, 25, 50, 75, 250
+            fullLayerID = self.pid2FullPid(layerID) if layerID in self.seamlessIDs else layerID
+            xmlString = "<REQUEST_SERVICE_INPUT><AOI_GEOMETRY><EXTENT><TOP>%f</TOP><BOTTOM>%f</BOTTOM><LEFT>%f</LEFT><RIGHT>%f</RIGHT></EXTENT><SPATIALREFERENCE_WKID/></AOI_GEOMETRY><LAYER_INFORMATION><LAYER_IDS>%s</LAYER_IDS></LAYER_INFORMATION><CHUNK_SIZE>%d</CHUNK_SIZE><JSON></JSON></REQUEST_SERVICE_INPUT>" % (mapextents['ymax'], mapextents['ymin'], mapextents['xmin'], mapextents['xmax'], fullLayerID, 250) # can be 100, 15, 25, 50, 75, 250
 
-            response = clientRequest.service.getTiledDataDirectURLs2(xmlString)
-
-            print "Requested URLs for layer ID %s..." % layerID
+            if layerID in self.seamlessIDs:
+                response = clientRequest.service.processAOI2(xmlString)
+                print("Requested URLs for seamless layer ID %s (aka %s)..." % (layerID, fullLayerID))
+            else:
+                response = clientRequest.service.getTiledDataDirectURLs2(xmlString)
+                print("Requested URLs for tiled layer ID %s..." % layerID)
 
             # I am still a bad man.
             downloadURLs = [x.rsplit("</DOWNLOAD_URL>")[0] for x in response.split("<DOWNLOAD_URL>")[1:]]
+            if len(downloadURLs) <= 0:
+                print("ERROR: No downloadURLs! Response was:\n%s" % response)
+                raise IOError
 
             retval[layerID] = downloadURLs
 
@@ -298,87 +342,205 @@ class Region:
 
     @staticmethod
     def getfn(downloadURL):
+        if isinstance(downloadURL, unicode):
+            downloadURL = downloadURL.encode('ascii', 'ignore')
         pdURL = urlparse.urlparse(downloadURL)
         pQS = urlparse.parse_qs(pdURL[4])
-        longfile = pQS['FNAME'][0]
-        justfile = os.path.split(longfile)[1]
+        if 'mdf' in pQS:
+            longfile = "%s%s%s%s%s" % (pQS['key'][0],pQS['lft'][0],pQS['rgt'][0],pQS['top'][0],pQS['bot'][0])
+            longfile = longfile.replace('.','')
+            justfile = "%s.%s" % (longfile,pQS['arc'][0])
+            justfile = justfile.lower()
+        else:
+            longfile = pQS['FNAME'][0]
+            justfile = os.path.split(longfile)[1]
         return justfile
 
     def retrievefile(self, layerID, downloadURL):
         """Retrieve the datafile associated with the URL.  This may require downloading it from the USGS servers or extracting it from a local archive."""
+        print "Attempting to retrieve %s..." % downloadURL
         fname = Region.getfn(downloadURL)
         layerdir = os.path.join(Region.downloadtop, layerID)
         if not os.path.exists(layerdir):
             os.makedirs(layerdir)
         downloadfile = os.path.join(layerdir, fname)
+
         # Apparently Range checks don't always work across Redirects
         # So find the final URL before starting the download
-        opener = urllib2.build_opener(SmartRedirectHandler())
-        dURL = downloadURL
-        while True:
-            req = urllib2.Request(dURL)
-            webPage = opener.open(req)
-            if hasattr(webPage, 'status') and webPage.status == 302:
-                dURL = webPage.url
-            else:
-                break
-        maxSize = int(webPage.headers['Content-Length'])
-        webPage.close()
-        if os.path.exists(downloadfile):
-            outputFile = open(downloadfile, 'ab')
-            existSize = os.path.getsize(downloadfile)
-            req.headers['Range'] = 'bytes=%s-%s' % (existSize, maxSize)
-        else:
-            outputFile = open(downloadfile, 'wb')
-            existSize = 0
-        webPage = opener.open(req)
-        if maxSize == existSize:
-            print "Using cached file for layerID %s" % layerID
-        else:
-            print "Downloading file from server for layerID %s" % layerID
-            pbar = ProgressBar(widgets=[Percentage(), ' ', Bar(), ' ', ETA(), ' ', FileTransferSpeed()], maxval=maxSize).start()
-            # This chunk size may be small!
-            max_chunk_size = 8192
-            # NB: USGS web servers do not handle resuming downloads correctly
-            # so we have to drop incoming data on the floor
-            if 'Content-Range' in webPage.headers:
-                # Resuming downloads are now working
-                # We can start from where we left off
-                numBytes = existSize
-            else:
-                numBytes = 0
-            # if numBytes is less than existSize, do not save what we download
-            while numBytes < existSize:
-                pbar.update(numBytes)
-                left = existSize - numBytes
-                chunk_size = left if left < max_chunk_size else max_chunk_size
-                data = webPage.read(chunk_size)
-                numBytes = numBytes + len(data)
-            # if numBytes is less than maxSize, save what we download
-            while numBytes < maxSize:
-                pbar.update(numBytes)
-                data = webPage.read(max_chunk_size)
-                if not data:
+        if not(layerID in self.seamlessIDs):
+            opener = urllib2.build_opener(SmartRedirectHandler())
+            dURL = downloadURL
+            while True:
+                req = urllib2.Request(dURL)
+                webPage = opener.open(req)
+                if hasattr(webPage, 'status') and webPage.status == 302:
+                    dURL = webPage.url
+                else:
                     break
-                outputFile.write(data)
-                numBytes = numBytes + len(data)
-            pbar.finish()
+            maxSize = int(webPage.headers['Content-Length'])
             webPage.close()
-            outputFile.close()
+
+            if os.path.exists(downloadfile):
+                outputFile = open(downloadfile, 'ab')
+                existSize = os.path.getsize(downloadfile)
+                req.headers['Range'] = 'bytes=%s-%s' % (existSize, maxSize)
+            else:
+                outputFile = open(downloadfile, 'wb')
+                existSize = 0
+            webPage = opener.open(req)
+            if maxSize == existSize:
+                print "Using cached file for layerID %s" % layerID
+            else:
+                print "Downloading file from server for layerID %s" % layerID
+                pbar = ProgressBar(widgets=[Percentage(), ' ', Bar(), ' ', ETA(), ' ', FileTransferSpeed()], maxval=maxSize).start()
+                # This chunk size may be small!
+                max_chunk_size = 8192
+                # NB: USGS web servers do not handle resuming downloads correctly
+                # so we have to drop incoming data on the floor
+                if 'Content-Range' in webPage.headers:
+                    # Resuming downloads are now working
+                    # We can start from where we left off
+                    numBytes = existSize
+                else:
+                    numBytes = 0
+                # if numBytes is less than existSize, do not save what we download
+                while numBytes < existSize:
+                    pbar.update(numBytes)
+                    left = existSize - numBytes
+                    chunk_size = left if left < max_chunk_size else max_chunk_size
+                    data = webPage.read(chunk_size)
+                    numBytes = numBytes + len(data)
+                # if numBytes is less than maxSize, save what we download
+                while numBytes < maxSize:
+                    pbar.update(numBytes)
+                    data = webPage.read(max_chunk_size)
+                    if not data:
+                        break
+                    outputFile.write(data)
+                    numBytes = numBytes + len(data)
+                pbar.finish()
+                webPage.close()
+                outputFile.close()
+
+        # This code is for Seamless layers. XXX TODO: Doesn't handle partially-fetched files
+        else:
+            if os.path.exists(downloadfile):
+                existSize = os.path.getsize(downloadfile)
+            else:
+                print("  Requesting download for %s." % layerID)
+                # initiateDownload and get the response code
+                # put _this_ in its own function!
+                try:
+                    page = urllib2.urlopen(downloadURL.replace(' ','%20'))
+                except IOError, e:
+                    if hasattr(e, 'reason'):
+                        raise IOError, e.reason
+                    elif hasattr(e, 'code'):
+                        raise IOError, e.code
+                    else:
+                        raise IOError
+                else:
+                    result = page.read()
+                    page.close()
+                    # parse response for request id
+                    if result.find("VALID>false") > -1:
+                        # problem with initiateDownload request string
+                        # handle that here
+                        pass
+                    else:
+                        # downloadRequest successfully entered into queue
+                        startPos = result.find("<ns:return>") + 11
+                        endPos = result.find("</ns:return>")
+                        requestID = result[startPos:endPos]
+                print "  request ID is %s" % requestID
+    
+                sleep(5)
+                while True:
+                    dsPage = urllib2.urlopen("http://extract.cr.usgs.gov/axis2/services/DownloadService/getDownloadStatus?downloadID=%s" % requestID)
+                    result = dsPage.read()
+                    dsPage.close()
+                    result = result.replace("&#xd;\n"," ")
+                    # parse out status code and status text
+                    startPos = result.find("<ns:return>") + 11
+                    endPos = result.find("</ns:return>")
+                    (code, status) = result[startPos:endPos].split(',', 1)
+                    print "  status is %s" % status
+                    if (int(code) == 400):
+                        break
+                    sleep(15)
+    
+                getFileURL = "http://extract.cr.usgs.gov/axis2/services/DownloadService/getData?downloadID=%s" % requestID
+                try:
+                    page3 = urllib2.Request(getFileURL)
+                    opener = urllib2.build_opener(SmartRedirectHandler())
+                    obj = opener.open(page3)
+                    location = obj.headers['Location'] 
+                    #filename = location.split('/')[-1].split('#')[0].split('?')[0]        
+                except IOError, e:
+                    if hasattr(e, 'reason'):
+                        raise IOError, e.reason
+                    elif hasattr(e, 'code'):
+                        raise IOError, e.code
+                    else:
+                        raise IOError
+                else:
+                    print "  downloading %s now!" % downloadfile
+                    downloadFile = open(downloadfile, 'wb')
+                    while True:
+                        data = obj.read(8192)
+                        if data == "":
+                            break
+                        downloadFile.write(data)
+                    downloadFile.close()
+                    obj.close()
+    
+                # UGH
+                setStatusURL = "http://extract.cr.usgs.gov/axis2/services/DownloadService/setDownloadComplete?downloadID=%s" % requestID
+                try:
+                    page4 = urllib2.urlopen(setStatusURL)
+                except IOError, e:
+                    if hasattr(e, 'reason'):
+                        raise IOError, e.reason
+                    elif hasattr(e, 'code'):
+                        raise IOError, e.code
+                    else:
+                        raise IOError
+                else:
+                    result = page4.read()
+                    page4.close()
+                    # remove carriage returns
+                    result = result.replace("&#xd;\n"," ")
+                    # parse out status code and status text
+                    startPos = result.find("<ns:return>") + 11
+                    endPos = result.find("</ns:return>")
+                    status = result[startPos:endPos]
+
         # FIXME: this is grotesque
         extracthead = fname.split('.')[0]
         layertype = self.layertype(layerID)
         if layertype == 'elevation':
             extractfiles = [os.path.join(extracthead, '.'.join(['float%s_%s' % (extracthead, Region.exsuf[layerID]), suffix])) for suffix in 'flt', 'hdr', 'prj']
         elif layertype == 'ortho':
-            extractfiles = ['.'.join([extracthead, suffix]) for suffix in 'tif', 'tfw']
+            extractfiles = ['.'.join([extracthead, suffix]) for suffix in ['tif']]
         else: # if layertype == 'landcover':
             extractfiles = ['.'.join([extracthead, suffix]) for suffix in 'tif', 'tfw']
         for extractfile in extractfiles:
             if os.path.exists(os.path.join(layerdir, extractfile)):
                 print "Using existing file %s for layerID %s" % (extractfile, layerID)
             else:
-                os.system('unzip "%s" "%s" -d "%s"' % (downloadfile, extractfile, layerdir))
+                if downloadfile[-3:] == 'zip':
+                    os.system('unzip "%s" "%s" -d "%s"' % (downloadfile, extractfile, layerdir))
+                elif downloadfile[-3:] == 'tgz' or downloadfile[-5:] == 'tar.gz':
+                    tf = tarfile.open(downloadfile,'r')
+                    for fn in tf.getnames():
+                        if fn[-3:] == 'tif':
+                            tf.close()
+                            print('cd %s && tar --strip-components 1 -xzvf "%s" "%s"' % (layerdir, downloadfile, fn))
+                            os.system('tar --strip-components 1 -xzvf "%s" "%s" -C "%s"' % (downloadfile, fn, layerdir))
+                            os.system('mv %s %s/%s.tif' % (fn.split('/')[-1], layerdir, fname.split('.')[0]))
+                            break
+                else:
+                    raise IOError
         return os.path.join(layerdir, extractfiles[0])
 
     def getfiles(self):
@@ -391,10 +553,14 @@ class Region:
             for downloadURL in downloadURLs[layerID]:
                 extractfile = self.retrievefile(layerID, downloadURL)
                 extractlist.append(extractfile)
+            if len(extractlist) <= 0:
+                print("ERROR: Zero files found for layer %s!\n" % layerID)
+                raise IOError
             # Build VRTs
             print "Building VRT file for layer %s (this may take some time)..." % layerID
             vrtfile = os.path.join(self.mapsdir, '%s.vrt' % layerID)
             buildvrtcmd = 'gdalbuildvrt "%s" %s' % (vrtfile, ' '.join(['"%s"' % os.path.abspath(extractfile) for extractfile in extractlist]))
+            print "$ "+buildvrtcmd
             os.system('%s' % buildvrtcmd)
             # Generate warped GeoTIFFs
             tiffile = os.path.join(self.mapsdir, '%s.tif' % layerID)
@@ -476,7 +642,7 @@ class Region:
         # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
         # data type is GDT_Int16 (elevation can be negative)
         driver = gdal.GetDriverByName("GTiff")
-        mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Int16)
+        mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Byte)
         # overall map transform should match elevation map transform
         mapds.SetGeoTransform(elgeotrans)
         srs = osr.SpatialReference()
@@ -604,11 +770,10 @@ class Region:
             if (tifnodata == None):
                 tifnodata = 0
             values[values == tifnodata] = -1    #Signal missing
-            #values = values.flatten()
             tifband = None
 
             print values.shape
-            mapds.GetRasterBand(band+Region.rasters['orthor']).WriteArray(values)
+            mapds.GetRasterBand(band+Region.rasters['orthor']-1).WriteArray(values)
             values = None
 
         # close the dataset

@@ -17,6 +17,15 @@ from terrain import Terrain
 from tree import Tree, treeObjs
 from ore import Ore
 
+# Try to get SparseWorld's mcBlockData class, if available
+try:
+    import sys
+    sys.path.append("../")
+    import mcBlockData
+    haveOrthoColors = True
+except ImportError:
+    haveOrthoColors = False
+
 class Tile:
     """Tiles are the base render object.  or something."""
 
@@ -58,6 +67,10 @@ class Tile:
         elarray = mapds.GetRasterBand(Region.rasters['elevation']).ReadAsArray(ox, oy, sx, sy)
         bathyarray = mapds.GetRasterBand(Region.rasters['bathy']).ReadAsArray(ox, oy, sx, sy)
         crustarray = mapds.GetRasterBand(Region.rasters['crust']).ReadAsArray(ox, oy, sx, sy)
+        orthor = mapds.GetRasterBand(Region.rasters['orthor']).ReadAsArray(ox, oy, sx, sy)
+        orthog = mapds.GetRasterBand(Region.rasters['orthog']).ReadAsArray(ox, oy, sx, sy)
+        orthob = mapds.GetRasterBand(Region.rasters['orthob']).ReadAsArray(ox, oy, sx, sy)
+        orthoa = mapds.GetRasterBand(Region.rasters['orthoa']).ReadAsArray(ox, oy, sx, sy)
 
         # calculate Minecraft corners
         self.mcoffsetx = self.tilex * self.size
@@ -85,6 +98,16 @@ class Tile:
             (blocks, datas, tree) = Terrain.place(mcx, mcy, mcz, lcval, crustval, bathyval, self.doSchematics)
             [ self.world.setBlockAt(mcx, y, mcz, block) for (y, block) in blocks if block != 0 ]
             [ self.world.setBlockDataAt(mcx, y, mcz, data) for (y, data) in datas if data != 0 ]
+
+            if haveOrthoColors:
+                [block, data] = mcBlockData.nearest(int(orthor[myz, myx]), \
+                                                    int(orthog[myz, myx]), \
+                                                    int(orthob[myz, myx]), \
+                                                    not(lcval >= 22 and lcval <=25))
+                self.world.setBlockAt(mcx, mcy, mcz, block)
+                if 0 != data:
+                    self.world.setBlockDataAt(mcx, mcy, mcz, data)
+
             # if trees are placed, elevation cannot be changed
             if tree:
                 Tree.placetreeintile(self, tree, mcx, mcy, mcz)
