@@ -45,7 +45,7 @@ class Region:
     t_srs = "+proj=aea +datum=NAD83 +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +units=m"
 
     # raster layer order
-    rasters = {'landcover': 1, 'elevation': 2, 'bathy': 3, 'crust': 4, 'orthor': 5, 'orthog': 6, 'orthob': 7, 'orthoa': 8}
+    rasters = {'landcover': 1, 'elevation': 2, 'bathy': 3, 'crust': 4, 'orthor': 5, 'orthog': 6, 'orthob': 7, 'orthoir': 8}
     
     # default values
     tilesize = 256

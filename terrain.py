@@ -2,6 +2,15 @@ from random import random, choice
 from utils import materialNamed, height
 from schematic import Schematic
 
+# Try to get SparseWorld's mcBlockData class, if available
+try:
+    import sys
+    sys.path.append("../")
+    import mcBlockData
+    haveOrthoColors = True
+except ImportError:
+    haveOrthoColors = False
+
 class Terrain:
     """Base class for landcover definitions."""
 
@@ -166,7 +175,7 @@ class Terrain:
 
     # method that actually places terrain
     @staticmethod
-    def place(x, y, z, lcval, crustval, bathyval, doSchematics):
+    def place(x, y, z, lcval, crustval, bathyval, doSchematics, r=None, g=None, b=None, ir=None):
         try:
             Terrain.terdict[lcval]
         except KeyError:
@@ -183,6 +192,15 @@ class Terrain:
             [ blocks.append((y, materialNamed(block) if type(block) is str else block)) for y in xrange(base, base+depth) if y > 0 ]
             [ datas.append((y, data)) for y in xrange(base, base+depth) if y > 0 ]
             base += depth
+
+        water = materialNamed('Water')
+        water = water(0) if type(water) is tuple else water 
+        iswater = (block == 'Water') if type(block) is str else (block == water)
+        if haveOrthoColors and not(iswater):
+            [block, data] = mcBlockData.nearest(r, g, b, ir, not(lcval >= 22 and lcval <=25))
+            blocks[-1] = (blocks[-1][0], block)
+            datas[-1] = (datas[-1][0], data)
+
         return blocks, datas, tree
 
 

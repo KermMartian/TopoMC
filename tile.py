@@ -17,15 +17,6 @@ from terrain import Terrain
 from tree import Tree, treeObjs
 from ore import Ore
 
-# Try to get SparseWorld's mcBlockData class, if available
-try:
-    import sys
-    sys.path.append("../")
-    import mcBlockData
-    haveOrthoColors = True
-except ImportError:
-    haveOrthoColors = False
-
 class Tile:
     """Tiles are the base render object.  or something."""
 
@@ -70,7 +61,7 @@ class Tile:
         orthor = mapds.GetRasterBand(Region.rasters['orthor']).ReadAsArray(ox, oy, sx, sy)
         orthog = mapds.GetRasterBand(Region.rasters['orthog']).ReadAsArray(ox, oy, sx, sy)
         orthob = mapds.GetRasterBand(Region.rasters['orthob']).ReadAsArray(ox, oy, sx, sy)
-        orthoa = mapds.GetRasterBand(Region.rasters['orthoa']).ReadAsArray(ox, oy, sx, sy)
+        orthoir = mapds.GetRasterBand(Region.rasters['orthoir']).ReadAsArray(ox, oy, sx, sy)
 
         # calculate Minecraft corners
         self.mcoffsetx = self.tilex * self.size
@@ -93,20 +84,15 @@ class Tile:
             lcval = int(lcarray[myz, myx])
             bathyval = int(bathyarray[myz, myx])
             crustval = int(crustarray[myz, myx])
+            rval  = int(orthor[myz, myx])
+            gval  = int(orthog[myz, myx])
+            bval  = int(orthob[myz, myx])
+            irval = int(orthoir[myz, myx])
             if mcy > self.peak[1]:
                 self.peak = [mcx, mcy, mcz]
-            (blocks, datas, tree) = Terrain.place(mcx, mcy, mcz, lcval, crustval, bathyval, self.doSchematics)
+            (blocks, datas, tree) = Terrain.place(mcx, mcy, mcz, lcval, crustval, bathyval, self.doSchematics, rval, gval, bval, irval)
             [ self.world.setBlockAt(mcx, y, mcz, block) for (y, block) in blocks if block != 0 ]
             [ self.world.setBlockDataAt(mcx, y, mcz, data) for (y, data) in datas if data != 0 ]
-
-            if haveOrthoColors:
-                [block, data] = mcBlockData.nearest(int(orthor[myz, myx]), \
-                                                    int(orthog[myz, myx]), \
-                                                    int(orthob[myz, myx]), \
-                                                    not(lcval >= 22 and lcval <=25))
-                self.world.setBlockAt(mcx, mcy, mcz, block)
-                if 0 != data:
-                    self.world.setBlockDataAt(mcx, mcy, mcz, data)
 
             # if trees are placed, elevation cannot be changed
             if tree:

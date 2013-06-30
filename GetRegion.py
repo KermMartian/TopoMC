@@ -59,7 +59,7 @@ def main():
     parser.add_argument('--orthoIDs', default=default_orthoIDs, type=checkOrthoIDs, help='ordered list of product IDs (default %s)' % default_orthoIDs)
     parser.add_argument('--elevationIDs', default=default_elevationIDs, type=checkElevationIDs, help='ordered list of product IDs (default %s)' % default_elevationIDs)
     parser.add_argument('--landcoverIDs', default=default_landcoverIDs, type=checkLandcoverIDs, help='ordered list of product IDs (default %s)' % default_landcoverIDs)
-    parser.add_argument('--disable-ore', action='store_false', dest='doOre', default=True, help='disable ore generation')
+    parser.add_argument('--enable-ore', action='store_true', dest='doOre', default=False, help='enable ore generation')
     parser.add_argument('--enable-schematics', action='store_true', dest='doSchematics', default=False, help='enable schematic usage')
     parser.add_argument('--debug', action='store_true', help='enable debug output')
     args = parser.parse_args()

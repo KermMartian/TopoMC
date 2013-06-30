@@ -6,6 +6,7 @@ from tile import Tile
 from utils import setspawnandsave
 import argparse
 import os
+import shutil
 import yaml
 from multiprocessing import Pool
 from itertools import product
@@ -115,6 +116,9 @@ def main():
     # tie up loose ends
     world.setPlayerGameType(1)
     setspawnandsave(world, peak)
+    oldyamlpath = os.path.join('Regions', args.name, 'Region.yaml')
+    newyamlpath = os.path.join('Worlds', args.name, 'Region.yaml')
+    shutil.copy(oldyamlpath, newyamlpath)
 
 if __name__ == '__main__':
     main()
