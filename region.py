@@ -99,7 +99,7 @@ class Region:
 
         # sealevel and maxdepth are not checked until after files are retrieved
         if sealevel == None:
-            sealevel = Region.sealevel
+            self.sealevel = Region.sealevel
         else:
             self.sealevel = sealevel
 
