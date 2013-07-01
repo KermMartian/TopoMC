@@ -14,11 +14,12 @@ from time import sleep
 import tarfile
 logging.basicConfig(level=logging.INFO)
 from utils import cleanmkdir
+from itertools import product
 from terrain import Terrain
 from pymclevel import mclevel
 
 from osgeo import gdal, osr
-from osgeo.gdalconst import GDT_Int16, GDT_Byte, GA_ReadOnly
+from osgeo.gdalconst import GDT_Int16, GA_ReadOnly
 from bathy import getBathy
 from crust import Crust
 import numpy
@@ -99,7 +100,7 @@ class Region:
 
         # sealevel and maxdepth are not checked until after files are retrieved
         if sealevel == None:
-            self.sealevel = Region.sealevel
+            sealevel = Region.sealevel
         else:
             self.sealevel = sealevel
 
@@ -318,23 +319,45 @@ class Region:
 
         # we now iterate through layerIDs
         for layerID in layerIDs:
+            retry = True
+            divisions = 1
             layertype = self.layertype(layerID)
-            mapextents = self.wgs84extents[layertype]
             fullLayerID = self.pid2FullPid(layerID) if layerID in self.seamlessIDs else layerID
-            xmlString = "<REQUEST_SERVICE_INPUT><AOI_GEOMETRY><EXTENT><TOP>%f</TOP><BOTTOM>%f</BOTTOM><LEFT>%f</LEFT><RIGHT>%f</RIGHT></EXTENT><SPATIALREFERENCE_WKID/></AOI_GEOMETRY><LAYER_INFORMATION><LAYER_IDS>%s</LAYER_IDS></LAYER_INFORMATION><CHUNK_SIZE>%d</CHUNK_SIZE><JSON></JSON></REQUEST_SERVICE_INPUT>" % (mapextents['ymax'], mapextents['ymin'], mapextents['xmin'], mapextents['xmax'], fullLayerID, 250) # can be 100, 15, 25, 50, 75, 250
+            downloadURLs = []
 
-            if layerID in self.seamlessIDs:
-                response = clientRequest.service.processAOI2(xmlString)
-                print("Requested URLs for seamless layer ID %s (aka %s)..." % (layerID, fullLayerID))
-            else:
-                response = clientRequest.service.getTiledDataDirectURLs2(xmlString)
-                print("Requested URLs for tiled layer ID %s..." % layerID)
-
-            # I am still a bad man.
-            downloadURLs = [x.rsplit("</DOWNLOAD_URL>")[0] for x in response.split("<DOWNLOAD_URL>")[1:]]
-            if len(downloadURLs) <= 0:
-                print("ERROR: No downloadURLs! Response was:\n%s" % response)
-                raise IOError
+            while retry:
+                for (xi, yi) in product(xrange(divisions),xrange(divisions)):
+                    baseextents = self.wgs84extents[layertype]
+                    mapextents['xmin'] = baseextents['xmin'] + float(xi) * (baseextents['xmax']-baseextents['xmin']) / divisions
+                    mapextents['xmax'] = baseextents['xmin'] + float(1 + xi) * (baseextents['xmax']-baseextents['xmin']) / divisions
+                    mapextents['ymin'] = baseextents['ymin'] + float(yi) * (baseextents['ymax']-baseextents['ymin']) / divisions
+                    mapextents['ymax'] = baseextents['ymin'] + float(1 + yi) * (baseextents['ymax']-baseextents['ymin']) / divisions
+                    xmlString = "<REQUEST_SERVICE_INPUT><AOI_GEOMETRY><EXTENT><TOP>%f</TOP>" \
+                                "<BOTTOM>%f</BOTTOM><LEFT>%f</LEFT><RIGHT>%f</RIGHT></EXTENT>" \
+                                "<SPATIALREFERENCE_WKID/></AOI_GEOMETRY><LAYER_INFORMATION>" \
+                                "<LAYER_IDS>%s</LAYER_IDS></LAYER_INFORMATION><CHUNK_SIZE>%d</CHUNK_SIZE>" \
+                                "<JSON></JSON></REQUEST_SERVICE_INPUT>" % \
+                                (mapextents['ymax'], mapextents['ymin'], mapextents['xmin'], \
+                                mapextents['xmax'], fullLayerID, 250) # can be 100, 15, 25, 50, 75, 250
+        
+                    if layerID in self.seamlessIDs:
+                        response = clientRequest.service.processAOI2(xmlString)
+                        print("Requested URLs for seamless layer ID %s (aka %s)..." % (layerID, fullLayerID))
+                    else:
+                        response = clientRequest.service.getTiledDataDirectURLs2(xmlString)
+                        print("Requested URLs for tiled layer ID %s..." % layerID)
+        
+                    # I am still a bad man.
+                    downloadURLs += [x.rsplit("</DOWNLOAD_URL>")[0] for x in response.split("<DOWNLOAD_URL>")[1:]]
+                    if len(downloadURLs) <= 0:
+                        if "<ERROR>" in response and "AOI" in response:
+                            # AOI was too large. Try again.
+                            print("Warning: USGS server indicated AOI was too large. Trying again with %d pieces" % (divisions**2))
+                            divisions += 1
+                            break
+                        else: 
+                            print("ERROR: No downloadURLs, and unknown error! Response was:\n%s" % response)
+                            raise IOError
 
             retval[layerID] = downloadURLs
 
@@ -642,7 +665,7 @@ class Region:
         # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
         # data type is GDT_Int16 (elevation can be negative)
         driver = gdal.GetDriverByName("GTiff")
-        mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Byte)
+        mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Int16)
         # overall map transform should match elevation map transform
         mapds.SetGeoTransform(elgeotrans)
         srs = osr.SpatialReference()
