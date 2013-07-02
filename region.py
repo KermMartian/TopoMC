@@ -328,6 +328,7 @@ class Region:
             while retry:
                 for (xi, yi) in product(xrange(divisions),xrange(divisions)):
                     baseextents = self.wgs84extents[layertype]
+                    mapextents = {}
                     mapextents['xmin'] = baseextents['xmin'] + float(xi) * (baseextents['xmax']-baseextents['xmin']) / divisions
                     mapextents['xmax'] = baseextents['xmin'] + float(1 + xi) * (baseextents['xmax']-baseextents['xmin']) / divisions
                     mapextents['ymin'] = baseextents['ymin'] + float(yi) * (baseextents['ymax']-baseextents['ymin']) / divisions
@@ -350,14 +351,15 @@ class Region:
                     # I am still a bad man.
                     downloadURLs += [x.rsplit("</DOWNLOAD_URL>")[0] for x in response.split("<DOWNLOAD_URL>")[1:]]
                     if len(downloadURLs) <= 0:
-                        if "<ERROR>" in response and "AOI" in response:
+                        if "<ERROR>" in response and "area of interest" in response:
                             # AOI was too large. Try again.
-                            print("Warning: USGS server indicated AOI was too large. Trying again with %d pieces" % (divisions**2))
                             divisions += 1
+                            print("Warning: USGS server indicated AOI was too large. Trying again with %d pieces" % (divisions**2))
                             break
                         else: 
                             print("ERROR: No downloadURLs, and unknown error! Response was:\n%s" % response)
                             raise IOError
+                    retry = False
 
             retval[layerID] = downloadURLs
 
@@ -600,6 +602,7 @@ class Region:
         elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
         elextents = self.albersextents['elevation']
         warpcmd = 'gdalwarp -q -multi -t_srs "%s" -tr %d %d -te %d %d %d %d -r cubic "%s" "%s" -srcnodata "-340282346638529993179660072199368212480.000" -dstnodata 0' % (Region.t_srs, self.scale, self.scale, elextents['xmin'], elextents['ymin'], elextents['xmax'], elextents['ymax'], eltif, elfile)
+        print "Completed first-pass warp over elevation data."
 
         try:
             os.remove(elfile)
@@ -613,6 +616,7 @@ class Region:
         elband = elds.GetRasterBand(1)
         elarray = elband.ReadAsArray(0, 0, elds.RasterXSize, elds.RasterYSize)
         (elysize, elxsize) = elarray.shape
+        print("Opened %d x %d elevation data array" % (elxsize, elysize))
 
         # update sealevel, trim and vscale
         elmin = elband.GetMinimum()
@@ -664,8 +668,10 @@ class Region:
         # GeoTIFF
         # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
         # data type is GDT_Int16 (elevation can be negative)
+        print "Creating output GeoTIFF..."
         driver = gdal.GetDriverByName("GTiff")
         mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Int16)
+        print "Output GeoTIFF initialized"
         # overall map transform should match elevation map transform
         mapds.SetGeoTransform(elgeotrans)
         srs = osr.SpatialReference()
@@ -673,12 +679,14 @@ class Region:
         mapds.SetProjection(srs.ExportToWkt())
 
         # modify elarray and save it as raster band 2
+        print "Adjusting and storing elevation to GeoTIFF..."
         actualel = ((elarray - self.trim)/self.vscale)+self.sealevel
         mapds.GetRasterBand(Region.rasters['elevation']).WriteArray(actualel)
         elarray = None
         actualel = None
 
         # generate crust and save it as raster band 4
+        print "Adjusting and storing crust to GeoTIFF..."
         newcrust = Crust(mapds.RasterXSize, mapds.RasterYSize, wantCL=wantCL)
         crustarray = newcrust()
         mapds.GetRasterBand(Region.rasters['crust']).WriteArray(crustarray)

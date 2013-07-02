@@ -13,6 +13,7 @@ from itertools import product
 from tree import Tree, treeObjs
 from ore import Ore, oreObjs
 from pymclevel import mclevel
+import time
 
 def buildtile(args):
     """Given a region name and coordinates, build the corresponding tile."""
@@ -73,9 +74,14 @@ def main():
     else:
         # multi-process ... let's see...
         pool = Pool()
-        pool.map(buildtile, tiles)
+        rs = pool.map(buildtile, tiles)
         pool.close()
-        pool.join()
+        #pool.join()
+        while True:
+            if (rs.ready()): break
+            remaining = rs._number_left
+            print "Waiting for " + str(remaining) + " tasks to complete..."
+            time.sleep(10)
 
     # merge individual worlds into it
     print "Merging %d tiles into one world..." % len(tiles)
