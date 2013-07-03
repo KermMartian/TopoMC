@@ -55,6 +55,7 @@ class Region:
     trim = 0
     sealevel = 64
     maxdepth = 32
+    prepTileSize = 1000
 
     # tileheight is height of map in Minecraft units TODO XXX CHANGE
     tileheight = mclevel.MCInfdevOldLevel.Height
@@ -601,7 +602,11 @@ class Region:
         eltif = os.path.join(self.mapsdir, '%s.tif' % (self.ellayer)) 
         elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
         elextents = self.albersextents['elevation']
-        warpcmd = 'gdalwarp -q -multi -t_srs "%s" -tr %d %d -te %d %d %d %d -r cubic "%s" "%s" -srcnodata "-340282346638529993179660072199368212480.000" -dstnodata 0' % (Region.t_srs, self.scale, self.scale, elextents['xmin'], elextents['ymin'], elextents['xmax'], elextents['ymax'], eltif, elfile)
+        warpcmd = 'gdalwarp -q -multi -t_srs "%s" -tr %d %d -te %d %d %d %d' \
+                  ' -r cubic "%s" "%s" -srcnodata "-340282346638529993179660072199368212480.000" ' \
+                  '-dstnodata 0' % (Region.t_srs, self.scale, self.scale, \
+                  elextents['xmin'], elextents['ymin'], elextents['xmax'], \
+                  elextents['ymax'], eltif, elfile)
         print "Completed first-pass warp over elevation data."
 
         try:
@@ -611,20 +616,15 @@ class Region:
         # NB: make this work on Windows too!
         os.system('%s' % warpcmd)
 
+        # First compute global elevation data
         elds = gdal.Open(elfile, GA_ReadOnly)
         elgeotrans = elds.GetGeoTransform()
         elband = elds.GetRasterBand(1)
-        elarray = elband.ReadAsArray(0, 0, elds.RasterXSize, elds.RasterYSize)
-        (elysize, elxsize) = elarray.shape
-        print("Opened %d x %d elevation data array" % (elxsize, elysize))
-
-        # update sealevel, trim and vscale
-        elmin = elband.GetMinimum()
-        elmax = elband.GetMaximum()
-        if elmin is None or elmax is None:
-            (elmin, elmax) = elband.ComputeRasterMinMax(False)
+        (elmin, elmax) = elband.ComputeRasterMinMax(False)
         elmin = int(elmin)
         elmax = int(elmax)
+        elxsize = elds.RasterXSize
+        elysize = elds.RasterYSize
         elband = None
         elds = None
 
@@ -664,44 +664,65 @@ class Region:
         if (oldvscale < minvscale):
             print "warning: vscale value %d smaller than minimum value %d" % (oldvscale, minvscale)
         self.vscale = int(max(oldvscale, minvscale))
+        # vscale/trim/maxdepth computation ends here
 
-        # GeoTIFF
-        # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
-        # data type is GDT_Int16 (elevation can be negative)
-        print "Creating output GeoTIFF..."
-        driver = gdal.GetDriverByName("GTiff")
-        mapds = driver.Create(self.mapname, elxsize, elysize, len(Region.rasters), GDT_Int16)
-        print "Output GeoTIFF initialized"
-        # overall map transform should match elevation map transform
-        mapds.SetGeoTransform(elgeotrans)
         srs = osr.SpatialReference()
         srs.ImportFromProj4(Region.t_srs)
-        mapds.SetProjection(srs.ExportToWkt())
+        driver = gdal.GetDriverByName("GTiff")
 
-        # modify elarray and save it as raster band 2
-        print "Adjusting and storing elevation to GeoTIFF..."
-        actualel = ((elarray - self.trim)/self.vscale)+self.sealevel
-        mapds.GetRasterBand(Region.rasters['elevation']).WriteArray(actualel)
-        elarray = None
-        actualel = None
+        tifds = gdal.Open(lctif, GA_ReadOnly)
+        tifgeotrans = tifds.GetGeoTransform()
+        tifds = None
+        lcxminarr = (lcextents['xmin']-tifgeotrans[0])/tifgeotrans[1])
+        lcxmaxarr = (lcextents['xmax']-tifgeotrans[0])/tifgeotrans[1])
+        lcyminarr = (lcextents['ymax']-tifgeotrans[3])/tifgeotrans[5])
+        lcymaxarr = (lcextents['ymin']-tifgeotrans[3])/tifgeotrans[5])
 
-        # generate crust and save it as raster band 4
-        print "Adjusting and storing crust to GeoTIFF..."
-        newcrust = Crust(mapds.RasterXSize, mapds.RasterYSize, wantCL=wantCL)
-        crustarray = newcrust()
-        mapds.GetRasterBand(Region.rasters['crust']).WriteArray(crustarray)
-        crustarray = None
-        newcrust = None
+        print("Processing %d x %d data array as tiles." % (elxsize, elysize))
+        for (tilex, tiley) in product(xrange(ceil(float(elxsize)/Region.prepTileSize)), \
+                                      xrange(ceil(float(elysize)/Region.prepTileSize))):
 
-        # read landcover array
-        print "Warping and storing landcover and bathy data..."
-        lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
-        lcfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.lclayer))
-        # here are the things that need to happen
-        lcextents = self.albersextents['landcover']
+            offsetx = tilex*Region.prepTileSize
+            offsety = tiley*Region.prepTileSize
+            sizex   = min(Region.preTileSize, elxsize - offsetx)
+            sizey   = min(Region.preTileSize, elysize - offsety)
 
-        # if True, use new code, if False, use gdalwarp
-        if True:
+            # GeoTIFF Image Tile
+            # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
+            # data type is GDT_Int16 (elevation can be negative)
+			print("Creating output image tile %d, %d" % (tilex,tily))
+            print("TODO XXX Set SetGeoTransform!!")
+	        mapds.SetProjection(srs.ExportToWkt())
+			tilename = os.path.join(self.regiondir, 'Tile_%04d_%04d.tif' % (tilex, tiley))
+			mapds = driver.Create(self.mapname, sizex, sizey, len(Region.rasters), GDT_Int16)
+            # overall map transform should match elevation map transform
+
+            # modify elarray and save it as raster band 2
+            print "Adjusting and storing elevation to GeoTIFF..."
+            elds = gdal.Open(elfile, GA_ReadOnly)
+            elarray = elds.GetRasterBand(1).ReadAsArray(offsetx, offsety, sizex, sizey)
+            elds = None
+            actualel = ((elarray - self.trim)/self.vscale)+self.sealevel
+            mapds.GetRasterBand(Region.rasters['elevation']).WriteArray(actualel)
+            elarray = None
+            actualel = None
+
+            # generate crust and save it as raster band 4
+            print "Adjusting and storing crust to GeoTIFF..."
+            newcrust = Crust(sizex, sizey, wantCL=wantCL)
+            crustarray = newcrust()
+            mapds.GetRasterBand(Region.rasters['crust']).WriteArray(crustarray)
+            crustarray = None
+            newcrust = None
+    
+# DONE TO HERE. BELOW CODE NEEDS HELP
+            # read landcover array
+            print "Warping and storing landcover and bathy data..."
+            lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
+            lcfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.lclayer))
+            # here are the things that need to happen
+            lcextents = self.albersextents['landcover']
+
             # 1. the new file must be read into an array and flattened
             tifds = gdal.Open(lctif, GA_ReadOnly)
             tifgeotrans = tifds.GetGeoTransform()
