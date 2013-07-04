@@ -2,6 +2,7 @@
 
 from __future__ import division
 from math import ceil, floor
+import math
 import suds
 import re
 import os
@@ -56,6 +57,7 @@ class Region:
     sealevel = 64
     maxdepth = 32
     prepTileSize = 1000
+    prepTileSizeOverlap = 1100
 
     # tileheight is height of map in Minecraft units TODO XXX CHANGE
     tileheight = mclevel.MCInfdevOldLevel.Height
@@ -618,7 +620,7 @@ class Region:
 
         # First compute global elevation data
         elds = gdal.Open(elfile, GA_ReadOnly)
-        elgeotrans = elds.GetGeoTransform()
+        elgeoxform = elds.GetGeoTransform()
         elband = elds.GetRasterBand(1)
         (elmin, elmax) = elband.ComputeRasterMinMax(False)
         elmin = int(elmin)
@@ -670,32 +672,37 @@ class Region:
         srs.ImportFromProj4(Region.t_srs)
         driver = gdal.GetDriverByName("GTiff")
 
+        lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
         tifds = gdal.Open(lctif, GA_ReadOnly)
         tifgeotrans = tifds.GetGeoTransform()
         tifds = None
-        lcxminarr = (lcextents['xmin']-tifgeotrans[0])/tifgeotrans[1])
-        lcxmaxarr = (lcextents['xmax']-tifgeotrans[0])/tifgeotrans[1])
-        lcyminarr = (lcextents['ymax']-tifgeotrans[3])/tifgeotrans[5])
-        lcymaxarr = (lcextents['ymin']-tifgeotrans[3])/tifgeotrans[5])
+        lcextentsWhole = self.albersextents['landcover']
+        xminarr = (lcextentsWhole['xmin']-tifgeotrans[0])/tifgeotrans[1]
+        xmaxarr = (lcextentsWhole['xmax']-tifgeotrans[0])/tifgeotrans[1]
+        yminarr = (lcextentsWhole['ymax']-tifgeotrans[3])/tifgeotrans[5]
+        ymaxarr = (lcextentsWhole['ymin']-tifgeotrans[3])/tifgeotrans[5]
 
         print("Processing %d x %d data array as tiles." % (elxsize, elysize))
-        for (tilex, tiley) in product(xrange(ceil(float(elxsize)/Region.prepTileSize)), \
-                                      xrange(ceil(float(elysize)/Region.prepTileSize))):
+        for (tilex, tiley) in product(xrange(int(ceil(float(elxsize)/Region.prepTileSize))), \
+                                      xrange(int(ceil(float(elysize)/Region.prepTileSize)))):
 
             offsetx = tilex*Region.prepTileSize
             offsety = tiley*Region.prepTileSize
-            sizex   = min(Region.preTileSize, elxsize - offsetx)
-            sizey   = min(Region.preTileSize, elysize - offsety)
+            sizex   = min(Region.prepTileSizeOverlap, elxsize - offsetx)
+            sizey   = min(Region.prepTileSizeOverlap, elysize - offsety)
 
             # GeoTIFF Image Tile
             # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
             # data type is GDT_Int16 (elevation can be negative)
-			print("Creating output image tile %d, %d" % (tilex,tily))
-            print("TODO XXX Set SetGeoTransform!!")
-	        mapds.SetProjection(srs.ExportToWkt())
-			tilename = os.path.join(self.regiondir, 'Tile_%04d_%04d.tif' % (tilex, tiley))
-			mapds = driver.Create(self.mapname, sizex, sizey, len(Region.rasters), GDT_Int16)
+            print("Creating output image tile %d, %d with offset (%d, %d) and size (%d, %d)" % \
+                  (tilex, tiley, offsetx, offsety, sizex, sizey))
+            tilename = os.path.join(self.regiondir, 'Tile_%04d_%04d.tif' % (tilex, tiley))
+            mapds = driver.Create(self.mapname, sizex, sizey, len(Region.rasters), GDT_Int16)
+            mapds.SetProjection(srs.ExportToWkt())
             # overall map transform should match elevation map transform
+            geoxform = [elgeoxform[0] + offsetx * elgeoxform[1], elgeoxform[1], elgeoxform[2], \
+                        elgeoxform[3] + offsety * elgeoxform[5], elgeoxform[4], elgeoxform[5]]
+            mapds.SetGeoTransform(geoxform)
 
             # modify elarray and save it as raster band 2
             print "Adjusting and storing elevation to GeoTIFF..."
@@ -715,23 +722,32 @@ class Region:
             crustarray = None
             newcrust = None
     
-# DONE TO HERE. BELOW CODE NEEDS HELP
             # read landcover array
             print "Warping and storing landcover and bathy data..."
-            lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
             lcfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.lclayer))
-            # here are the things that need to happen
-            lcextents = self.albersextents['landcover']
 
             # 1. the new file must be read into an array and flattened
             tifds = gdal.Open(lctif, GA_ReadOnly)
-            tifgeotrans = tifds.GetGeoTransform()
             tifband = tifds.GetRasterBand(1)
-            xminarr = int((lcextents['xmin']-tifgeotrans[0])/tifgeotrans[1])
-            xmaxarr = int((lcextents['xmax']-tifgeotrans[0])/tifgeotrans[1])
-            yminarr = int((lcextents['ymax']-tifgeotrans[3])/tifgeotrans[5])
-            ymaxarr = int((lcextents['ymin']-tifgeotrans[3])/tifgeotrans[5])
-            values = tifband.ReadAsArray(xminarr, yminarr, xmaxarr-xminarr, ymaxarr-yminarr)
+
+# DONE TO HERE. BELOW CODE NEEDS HELP
+            lcextents = {}
+            lcextents['xmin'] = lcextentsWhole['xmin'] + \
+                                (offsetx / float(elxsize)) * (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
+            lcextents['xmax'] = lcextentsWhole['xmax'] + \
+                                ((offsetx + sizex) / float(elxsize)) * (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
+            lcextents['ymin'] = lcextentsWhole['ymin'] + \
+                                (offsety / float(elysize)) * (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
+            lcextents['ymax'] = lcextentsWhole['ymax'] + \
+                                ((offsety + sizey) / float(elysize)) * (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
+
+            lcxminarr = int(xminarr + (offsetx / float(elxsize)) * (xmaxarr - xminarr))
+            lcxmaxarr = int(xminarr + ((offsetx + sizex) / float(elxsize)) * (xmaxarr - xminarr))
+            lcyminarr = int(yminarr + (offsety / float(elysize)) * (ymaxarr - yminarr))
+            lcymaxarr = int(yminarr + ((offsety + sizey) / float(elysize)) * (ymaxarr - yminarr))
+
+            print("LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
+            values = tifband.ReadAsArray(lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr)
             # nodata is treated as water, which is 11
             tifnodata = tifband.GetNoDataValue()
             if (tifnodata == None):
@@ -739,10 +755,12 @@ class Region:
             values[values == tifnodata] = 11
             values = values.flatten()
             tifband = None
-            # 2. a new array of original scale coordinates must be created
-            tifxrange = [tifgeotrans[0] + tifgeotrans[1] * x for x in xrange(xminarr, xmaxarr)]
-            tifyrange = [tifgeotrans[3] + tifgeotrans[5] * y for y in xrange(yminarr, ymaxarr)]
             tifds = None
+
+            # 2. a new array of original scale coordinates must be created
+            #    The following two lines should work fine still because x and y are offset into the array
+            tifxrange = [tifgeotrans[0] + tifgeotrans[1] * x for x in xrange(lcxminarr, lcxmaxarr)]
+            tifyrange = [tifgeotrans[3] + tifgeotrans[5] * y for y in xrange(lcyminarr, lcymaxarr)]
             coords = numpy.array([(x, y) for y in tifyrange for x in tifxrange])
             # 3. a new array of goal scale coordinates must be made
             # landcover extents are used for the bathy depth array
@@ -830,3 +848,21 @@ class Region:
 
         # close the dataset
         mapds = None
+
+    # Thanks to http://williams.best.vwh.net/avform.htm#LL
+    # Takes a base (lat1, lon1) point and offsets by dist meters in the angle direction
+    def lloffset(self, lat1, lon1, angle, dist):
+        lat1 = math.radians(lat1)
+        lon1 = math.radians(lon1)
+        a = 6378137.0 # Equatorial radius, meters
+        b = 6356752.3 # Polar radius, meters
+        earth_rad = math.sqrt( ((((a ** 2)*math.cos(lat1)) ** 2) + (((b ** 2)*math.sin(lat1)) ** 2))
+                             / (((a*math.cos(lat1)) ** 2) + ((b*math.sin(lat1)) ** 2)))
+        print("earth rad %f at lat %f lon %f" % (earth_rad, lat1, lon1))
+        dist /= earth_rad
+        lat = math.asin(math.sin(lat1) * math.cos(dist) + \
+                        math.cos(lat1) * math.sin(dist) * math.cos(angle))
+        lon = lon1 if math.cos(lat) == 0 else \
+              math.fmod(lon1-math.asin(math.sin(angle) * math.sin(dist) / math.cos(lat)) + math.pi, 2 * math.pi) - math.pi
+        return (math.degrees(lat), math.degrees(lon))
+
