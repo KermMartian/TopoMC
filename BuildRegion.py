@@ -9,6 +9,7 @@ import os
 import shutil
 import yaml
 from multiprocessing import Pool
+#from multiprocessing.pool import AsyncResult
 from itertools import product
 from tree import Tree, treeObjs
 from ore import Ore, oreObjs
@@ -74,14 +75,14 @@ def main():
     else:
         # multi-process ... let's see...
         pool = Pool()
-        rs = pool.map(buildtile, tiles)
+        rs = pool.map_async(buildtile, tiles)
         pool.close()
         #pool.join()
-        while True:
-            if (rs.ready()): break
+        while not(rs.ready()):
             remaining = rs._number_left
             print "Waiting for " + str(remaining) + " tasks to complete..."
             time.sleep(10)
+        pool.join()        # Just as a precaution.
 
     # merge individual worlds into it
     print "Merging %d tiles into one world..." % len(tiles)

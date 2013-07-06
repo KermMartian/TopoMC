@@ -209,13 +209,25 @@ class Region:
 
         # now convert back from Albers to WGS84
         for maptype in ['ortho', 'landcover', 'elevation']:
-            ULdict = {'X_Value': self.albersextents[maptype]['xmin'], 'Y_Value': self.albersextents[maptype]['ymin'], 'Current_Coordinate_System': Region.albers, 'Target_Coordinate_System': Region.wgs84}
+            ULdict = {'X_Value': self.albersextents[maptype]['xmin'], \
+                      'Y_Value': self.albersextents[maptype]['ymin'], \
+                      'Current_Coordinate_System': Region.albers, \
+                      'Target_Coordinate_System': Region.wgs84}
             (ULx, ULy) = re.findall(Convre, clientConv.service.getCoordinates(**ULdict))[0]
-            URdict = {'X_Value': self.albersextents[maptype]['xmax'], 'Y_Value': self.albersextents[maptype]['ymin'], 'Current_Coordinate_System': Region.albers, 'Target_Coordinate_System': Region.wgs84}
+            URdict = {'X_Value': self.albersextents[maptype]['xmax'], \
+                      'Y_Value': self.albersextents[maptype]['ymin'], \
+                      'Current_Coordinate_System': Region.albers, \
+                      'Target_Coordinate_System': Region.wgs84}
             (URx, URy) = re.findall(Convre, clientConv.service.getCoordinates(**URdict))[0]
-            LLdict = {'X_Value': self.albersextents[maptype]['xmin'], 'Y_Value': self.albersextents[maptype]['ymax'], 'Current_Coordinate_System': Region.albers, 'Target_Coordinate_System': Region.wgs84}
+            LLdict = {'X_Value': self.albersextents[maptype]['xmin'], \
+                      'Y_Value': self.albersextents[maptype]['ymax'], \
+                      'Current_Coordinate_System': Region.albers, \
+                      'Target_Coordinate_System': Region.wgs84}
             (LLx, LLy) = re.findall(Convre, clientConv.service.getCoordinates(**LLdict))[0]
-            LRdict = {'X_Value': self.albersextents[maptype]['xmax'], 'Y_Value': self.albersextents[maptype]['ymax'], 'Current_Coordinate_System': Region.albers, 'Target_Coordinate_System': Region.wgs84}
+            LRdict = {'X_Value': self.albersextents[maptype]['xmax'], \
+                      'Y_Value': self.albersextents[maptype]['ymax'], \
+                      'Current_Coordinate_System': Region.albers, \
+                      'Target_Coordinate_System': Region.wgs84}
             (LRx, LRy) = re.findall(Convre, clientConv.service.getCoordinates(**LRdict))[0]
 
             # select maximum values
@@ -700,6 +712,7 @@ class Region:
         xmaxarr = (lcextentsWhole['xmax']-tifgeotrans[0])/tifgeotrans[1]
         yminarr = (lcextentsWhole['ymax']-tifgeotrans[3])/tifgeotrans[5]
         ymaxarr = (lcextentsWhole['ymin']-tifgeotrans[3])/tifgeotrans[5]
+        print("Landcover extents are %s -> %s" % (str(lcextentsWhole), str([xminarr, xmaxarr, yminarr, ymaxarr])))
 
         tiftiles = []
 
@@ -743,34 +756,40 @@ class Region:
             crustarray = None
             newcrust = None
     
+            # Compute new geographic tile extents for landcover
+            lcextents = {}
+            border   = self.scale * self.maxdepth
+            lcxsize  = elxsize + 2 * border   # Total LC region size
+            lcysize  = elysize + 2 * border
+            lctxsize = sizex + 2 * border     # Current LC tile size
+            lctysize = sizey + 2 * border
+            lcextents['xmin'] = lcextentsWhole['xmin'] + \
+                                (offsetx / float(lcxsize)) * \
+                                (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
+            lcextents['xmax'] = lcextentsWhole['xmin'] + \
+                                ((offsetx + lctxsize) / float(lcxsize)) * \
+                                (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
+            lcextents['ymax'] = lcextentsWhole['ymax'] - \
+                                (offsety / float(lcysize)) * \
+                                (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
+            lcextents['ymin'] = lcextentsWhole['ymax'] - \
+                                ((offsety + lctysize) / float(lcysize)) * \
+                                (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
+
+            # Compute new array tile extents for landcover
+            lcxminarr = int(xminarr + (offsetx / float(lcxsize)) * (xmaxarr - xminarr))
+            lcxmaxarr = int(xminarr + ((offsetx + lctxsize) / float(lcxsize)) * (xmaxarr - xminarr))
+            lcyminarr = int(yminarr + (offsety / float(lcysize)) * (ymaxarr - yminarr))
+            lcymaxarr = int(yminarr + ((offsety + lctysize) / float(lcysize)) * (ymaxarr - yminarr))
+
             # read landcover array
             print "Warping and storing landcover and bathy data..."
-            lcfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.lclayer))
-
-            # 1. the new file must be read into an array and flattened
+            print("LC extents: %s" % str(lcextents))
+            print("LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
             tifds = gdal.Open(lctif, GA_ReadOnly)
             tifband = tifds.GetRasterBand(1)
-
-# DONE TO HERE. BELOW CODE NEEDS HELP
-            lcextents = {}
-            lcextents['xmin'] = lcextentsWhole['xmin'] + \
-                                (offsetx / float(elxsize)) * (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
-            lcextents['xmax'] = lcextentsWhole['xmin'] + \
-                                ((offsetx + sizex) / float(elxsize)) * (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
-            lcextents['ymin'] = lcextentsWhole['ymin'] + \
-                                (offsety / float(elysize)) * (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
-            lcextents['ymax'] = lcextentsWhole['ymin'] + \
-                                ((offsety + sizey) / float(elysize)) * (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
-
-            lcxminarr = int(xminarr + (offsetx / float(elxsize)) * (xmaxarr - xminarr))
-            lcxmaxarr = int(xminarr + ((offsetx + sizex) / float(elxsize)) * (xmaxarr - xminarr))
-            lcyminarr = int(yminarr + (offsety / float(elysize)) * (ymaxarr - yminarr))
-            lcymaxarr = int(yminarr + ((offsety + sizey) / float(elysize)) * (ymaxarr - yminarr))
-
-            print("LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
             values = tifband.ReadAsArray(lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr)
-            # nodata is treated as water, which is 11
-            tifnodata = tifband.GetNoDataValue()
+            tifnodata = tifband.GetNoDataValue()  #nodata is treated as water, which is 11
             if (tifnodata == None):
                 tifnodata = 0
             values[values == tifnodata] = 11
@@ -821,22 +840,8 @@ class Region:
             print lcarray.shape
             mapds.GetRasterBand(Region.rasters['landcover']).WriteArray(lcarray)
     
-            # read ortho arrays
-            # 1. the new file must be read into arrays
+            # read and store ortho arrays
             tifds = gdal.Open(oifile, GA_ReadOnly)
-#            oitifgeotrans = tifds.GetGeoTransform()
-#            oiextentsWhole = self.albersextents['ortho']
-    
-#            xminarr2 = (oiextentsWhole['xmin']-oitifgeotrans[0])/oitifgeotrans[1]
-#            xmaxarr2 = (oiextentsWhole['xmax']-oitifgeotrans[0])/oitifgeotrans[1]
-#            yminarr2 = (oiextentsWhole['ymax']-oitifgeotrans[3])/oitifgeotrans[5]
-#            ymaxarr2 = (oiextentsWhole['ymin']-oitifgeotrans[3])/oitifgeotrans[5]
-#
-#            oixminarr = int(xminarr2 + (offsetx / float(elxsize)) * (xmaxarr2 - xminarr2))
-#            oixmaxarr = int(xminarr2 + ((offsetx + sizex) / float(elxsize)) * (xmaxarr2 - xminarr2))
-#            oiyminarr = int(yminarr2 + (offsety / float(elysize)) * (ymaxarr2 - yminarr2))
-#            oiymaxarr = int(yminarr2 + ((offsety + sizey) / float(elysize)) * (ymaxarr2 - yminarr2))
-    
             for band in xrange(1,5):		# That is, [1 2 3 4]
                 print "Cropping and storing ortho data (%s band)..." % "-rgba"[band]
                 tifband = tifds.GetRasterBand(band)
