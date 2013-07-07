@@ -9,9 +9,11 @@ import os
 import urllib2
 import urlparse
 from progressbar import ProgressBar, Percentage, Bar, ETA, FileTransferSpeed
+from multiprocessing import Pool
 import yaml
 import logging
 from time import sleep
+import time
 import tarfile
 logging.basicConfig(level=logging.INFO)
 from utils import cleanmkdir
@@ -607,7 +609,7 @@ class Region:
             warpcmd = 'gdalwarp -q -multi -t_srs "%s" "%s" "%s"' % (Region.t_srs, vrtfile, tiffile)
             os.system('%s' % warpcmd)
 
-    def buildmap(self, wantCL=True):
+    def buildmap(self, wantCL=True, single=False):
         """Use downloaded files and other parameters to build multi-raster map."""
 
         # warp elevation data into new format
@@ -699,10 +701,6 @@ class Region:
         self.vscale = int(max(oldvscale, minvscale))
         # vscale/trim/maxdepth computation ends here
 
-        srs = osr.SpatialReference()
-        srs.ImportFromProj4(Region.t_srs)
-        driver = gdal.GetDriverByName("GTiff")
-
         lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
         tifds = gdal.Open(lctif, GA_ReadOnly)
         tifgeotrans = tifds.GetGeoTransform()
@@ -712,155 +710,30 @@ class Region:
         xmaxarr = (lcextentsWhole['xmax']-tifgeotrans[0])/tifgeotrans[1]
         yminarr = (lcextentsWhole['ymax']-tifgeotrans[3])/tifgeotrans[5]
         ymaxarr = (lcextentsWhole['ymin']-tifgeotrans[3])/tifgeotrans[5]
+        lcarr = [xminarr, xmaxarr, yminarr, ymaxarr]
         print("Landcover extents are %s -> %s" % (str(lcextentsWhole), str([xminarr, xmaxarr, yminarr, ymaxarr])))
 
         tiftiles = []
 
         print("Processing %d x %d data array as tiles." % (elxsize, elysize))
-        for (tilex, tiley) in product(xrange(int(ceil(float(elxsize)/Region.prepTileSize))), \
-                                      xrange(int(ceil(float(elysize)/Region.prepTileSize)))):
+        tiles = [(self.name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) \
+                 for (tilex, tiley) in \
+                 product(xrange(int(ceil(float(elxsize)/Region.prepTileSize))), \
+                         xrange(int(ceil(float(elysize)/Region.prepTileSize))))]
 
-            offsetx = tilex*Region.prepTileSize
-            offsety = tiley*Region.prepTileSize
-            sizex   = min(Region.prepTileSizeOverlap, elxsize - offsetx)
-            sizey   = min(Region.prepTileSizeOverlap, elysize - offsety)
-
-            # GeoTIFF Image Tile
-            # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
-            # data type is GDT_Int16 (elevation can be negative)
-            print("Creating output image tile %d, %d with offset (%d, %d) and size (%d, %d)" % \
-                  (tilex, tiley, offsetx, offsety, sizex, sizey))
-            tilename = os.path.join(self.regiondir, 'Tile_%04d_%04d.tif' % (tilex, tiley))
-            mapds = driver.Create(tilename, sizex, sizey, len(Region.rasters), GDT_Int16)
-            mapds.SetProjection(srs.ExportToWkt())
-            # overall map transform should match elevation map transform
-            geoxform = [elgeoxform[0] + offsetx * elgeoxform[1], elgeoxform[1], elgeoxform[2], \
-                        elgeoxform[3] + offsety * elgeoxform[5], elgeoxform[4], elgeoxform[5]]
-            mapds.SetGeoTransform(geoxform)
-
-            # modify elarray and save it as raster band 2
-            print "Adjusting and storing elevation to GeoTIFF..."
-            elds = gdal.Open(elfile, GA_ReadOnly)
-            elarray = elds.GetRasterBand(1).ReadAsArray(offsetx, offsety, sizex, sizey)
-            elds = None
-            actualel = ((elarray - self.trim)/self.vscale)+self.sealevel
-            mapds.GetRasterBand(Region.rasters['elevation']).WriteArray(actualel)
-            elarray = None
-            actualel = None
-
-            # generate crust and save it as raster band 4
-            print "Adjusting and storing crust to GeoTIFF..."
-            newcrust = Crust(sizex, sizey, wantCL=wantCL)
-            crustarray = newcrust()
-            mapds.GetRasterBand(Region.rasters['crust']).WriteArray(crustarray)
-            crustarray = None
-            newcrust = None
-    
-            # Compute new geographic tile extents for landcover
-            lcextents = {}
-            border   = self.scale * self.maxdepth
-            lcxsize  = elxsize + 2 * border   # Total LC region size
-            lcysize  = elysize + 2 * border
-            lctxsize = sizex + 2 * border     # Current LC tile size
-            lctysize = sizey + 2 * border
-            lcextents['xmin'] = lcextentsWhole['xmin'] + \
-                                (offsetx / float(lcxsize)) * \
-                                (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
-            lcextents['xmax'] = lcextentsWhole['xmin'] + \
-                                ((offsetx + lctxsize) / float(lcxsize)) * \
-                                (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
-            lcextents['ymax'] = lcextentsWhole['ymax'] - \
-                                (offsety / float(lcysize)) * \
-                                (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
-            lcextents['ymin'] = lcextentsWhole['ymax'] - \
-                                ((offsety + lctysize) / float(lcysize)) * \
-                                (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
-
-            # Compute new array tile extents for landcover
-            lcxminarr = int(xminarr + (offsetx / float(lcxsize)) * (xmaxarr - xminarr))
-            lcxmaxarr = int(xminarr + ((offsetx + lctxsize) / float(lcxsize)) * (xmaxarr - xminarr))
-            lcyminarr = int(yminarr + (offsety / float(lcysize)) * (ymaxarr - yminarr))
-            lcymaxarr = int(yminarr + ((offsety + lctysize) / float(lcysize)) * (ymaxarr - yminarr))
-
-            # read landcover array
-            print "Warping and storing landcover and bathy data..."
-            print("LC extents: %s" % str(lcextents))
-            print("LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
-            tifds = gdal.Open(lctif, GA_ReadOnly)
-            tifband = tifds.GetRasterBand(1)
-            values = tifband.ReadAsArray(lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr)
-            tifnodata = tifband.GetNoDataValue()  #nodata is treated as water, which is 11
-            if (tifnodata == None):
-                tifnodata = 0
-            values[values == tifnodata] = 11
-            values = values.flatten()
-            tifband = None
-            tifds = None
-
-            # 2. a new array of original scale coordinates must be created
-            #    The following two lines should work fine still because x and y are offset into the array
-            tifxrange = [tifgeotrans[0] + tifgeotrans[1] * x for x in xrange(lcxminarr, lcxmaxarr)]
-            tifyrange = [tifgeotrans[3] + tifgeotrans[5] * y for y in xrange(lcyminarr, lcymaxarr)]
-            coords = numpy.array([(x, y) for y in tifyrange for x in tifxrange])
-
-            # 3. a new array of goal scale coordinates must be made
-            # landcover extents are used for the bathy depth array
-            # yes, it's confusing.  sorry.
-            depthxlen = int((lcextents['xmax']-lcextents['xmin'])/self.scale)
-            depthylen = int((lcextents['ymax']-lcextents['ymin'])/self.scale)
-            depthxrange = [lcextents['xmin'] + self.scale * x for x in xrange(depthxlen)]
-            depthyrange = [lcextents['ymax'] - self.scale * y for y in xrange(depthylen)]
-            depthbase = numpy.array([(x, y) for y in depthyrange for x in depthxrange])
-
-            # 4. an inverse distance tree must be built from that
-            lcCLIDT = CLIDT(coords, values, depthbase, wantCL=wantCL)
-
-            # 5. the desired output comes from that inverse distance tree
-            deptharray = lcCLIDT()
-            deptharray.resize((depthylen, depthxlen))
-            lcCLIDT = None
-
-            # 6. Finish and store the band
-            lcarray = deptharray[self.maxdepth:-1*self.maxdepth, self.maxdepth:-1*self.maxdepth]
-            geotrans = [ lcextents['xmin'], self.scale, 0, lcextents['ymax'], 0, -1 * self.scale ]
-            projection = srs.ExportToWkt()
-            bathyarray = getBathy(deptharray, self.maxdepth, geotrans, projection)
-            mapds.GetRasterBand(Region.rasters['bathy']).WriteArray(bathyarray)
-    
-            # perform terrain translation
-            # NB: figure out why this doesn't work up above
-            lcpid = self.lclayer[:3]
-            if lcpid in Terrain.translate:
-                trans = Terrain.translate[lcpid]
-                for key in trans:
-                    lcarray[lcarray == key] = trans[key]
-                for value in numpy.unique(lcarray).flat:
-                    if value not in Terrain.terdict:
-                        print "bad value: ", value
-            print lcarray.shape
-            mapds.GetRasterBand(Region.rasters['landcover']).WriteArray(lcarray)
-    
-            # read and store ortho arrays
-            tifds = gdal.Open(oifile, GA_ReadOnly)
-            for band in xrange(1,5):		# That is, [1 2 3 4]
-                print "Cropping and storing ortho data (%s band)..." % "-rgba"[band]
-                tifband = tifds.GetRasterBand(band)
-                #values = tifband.ReadAsArray(oixminarr, oiyminarr, (oixmaxarr - oixminarr), (oiymaxarr - oiyminarr))
-                values = tifband.ReadAsArray(offsetx, offsety, sizex, sizey)
-                tifnodata = tifband.GetNoDataValue()
-                if (tifnodata == None):
-                    tifnodata = 0
-                values[values == tifnodata] = -1    #Signal missing
-                tifband = None
-    
-                print values.shape
-                mapds.GetRasterBand(band+Region.rasters['orthor']-1).WriteArray(values)
-                values = None
-            tifds = None
-
-            # close the dataset and append it to the tile list
-            mapds = None
-            tiftiles.append(tilename)
+        if single:
+            tiftiles = [self.buildmaptile(tile) for tile in tiles]
+        else:
+            # multi-process ... let's see...
+            pool = Pool()
+            rs = pool.map_async(buildmaptile, tiles)
+            pool.close()
+            while not(rs.ready()):
+                remaining = rs._number_left
+                print "Waiting for " + str(remaining) + " tasks to complete..."
+                time.sleep(10)
+            pool.join()        # Just as a precaution.
+            tiftiles = rs.get()
 
         # Now join everything together!
         print("Joining %d files into final TIF image..." % len(tiftiles))
@@ -893,4 +766,163 @@ class Region:
         lon = lon1 if math.cos(lat) == 0 else \
               math.fmod(lon1-math.asin(math.sin(angle) * math.sin(dist) / math.cos(lat)) + math.pi, 2 * math.pi) - math.pi
         return (math.degrees(lat), math.degrees(lon))
+
+# Global scope
+def buildmaptile(args):
+    (name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) = args
+    (xminarr, xmaxarr, yminarr, ymaxarr) = lcarr
+
+    yamlfile = file(os.path.join('Regions', name, 'Region.yaml'))
+    self = yaml.load(yamlfile)
+    yamlfile.close()
+
+    offsetx = tilex * Region.prepTileSize
+    offsety = tiley * Region.prepTileSize
+    sizex   = min(Region.prepTileSizeOverlap, elxsize - offsetx)
+    sizey   = min(Region.prepTileSizeOverlap, elysize - offsety)
+
+    srs = osr.SpatialReference()
+    srs.ImportFromProj4(Region.t_srs)
+    driver = gdal.GetDriverByName("GTiff")
+    lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
+    lcextentsWhole = self.albersextents['landcover']
+    elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
+    oifile = os.path.join(self.mapsdir, '%s-new.tif' % (self.oilayer))
+
+    # GeoTIFF Image Tile
+    # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
+    # data type is GDT_Int16 (elevation can be negative)
+    print("Creating output image tile %d, %d with offset (%d, %d) and size (%d, %d)" % \
+          (tilex, tiley, offsetx, offsety, sizex, sizey))
+    tilename = os.path.join(self.regiondir, 'Tile_%04d_%04d.tif' % (tilex, tiley))
+    mapds = driver.Create(tilename, sizex, sizey, len(Region.rasters), GDT_Int16)
+    mapds.SetProjection(srs.ExportToWkt())
+    # overall map transform should match elevation map transform
+    geoxform = [elgeoxform[0] + offsetx * elgeoxform[1], elgeoxform[1], elgeoxform[2], \
+                elgeoxform[3] + offsety * elgeoxform[5], elgeoxform[4], elgeoxform[5]]
+    mapds.SetGeoTransform(geoxform)
+
+    # modify elarray and save it as raster band 2
+    print "Adjusting and storing elevation to GeoTIFF..."
+    elds = gdal.Open(elfile, GA_ReadOnly)
+    elarray = elds.GetRasterBand(1).ReadAsArray(offsetx, offsety, sizex, sizey)
+    elds = None
+    actualel = ((elarray - self.trim)/self.vscale)+self.sealevel
+    mapds.GetRasterBand(Region.rasters['elevation']).WriteArray(actualel)
+    elarray = None
+    actualel = None
+
+    # generate crust and save it as raster band 4
+    print "Adjusting and storing crust to GeoTIFF..."
+    newcrust = Crust(sizex, sizey, wantCL=wantCL)
+    crustarray = newcrust()
+    mapds.GetRasterBand(Region.rasters['crust']).WriteArray(crustarray)
+    crustarray = None
+    newcrust = None
+
+    # Compute new geographic tile extents for landcover
+    lcextents = {}
+    border   = self.scale * self.maxdepth
+    lcxsize  = elxsize + 2 * border   # Total LC region size
+    lcysize  = elysize + 2 * border
+    lctxsize = sizex + 2 * border     # Current LC tile size
+    lctysize = sizey + 2 * border
+    lcextents['xmin'] = lcextentsWhole['xmin'] + \
+                        (offsetx / float(lcxsize)) * \
+                        (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
+    lcextents['xmax'] = lcextentsWhole['xmin'] + \
+                        ((offsetx + lctxsize) / float(lcxsize)) * \
+                        (lcextentsWhole['xmax'] - lcextentsWhole['xmin'])
+    lcextents['ymax'] = lcextentsWhole['ymax'] - \
+                        (offsety / float(lcysize)) * \
+                        (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
+    lcextents['ymin'] = lcextentsWhole['ymax'] - \
+                        ((offsety + lctysize) / float(lcysize)) * \
+                        (lcextentsWhole['ymax'] - lcextentsWhole['ymin'])
+
+    # Compute new array tile extents for landcover
+    lcxminarr = int(xminarr + (offsetx / float(lcxsize)) * (xmaxarr - xminarr))
+    lcxmaxarr = int(xminarr + ((offsetx + lctxsize) / float(lcxsize)) * (xmaxarr - xminarr))
+    lcyminarr = int(yminarr + (offsety / float(lcysize)) * (ymaxarr - yminarr))
+    lcymaxarr = int(yminarr + ((offsety + lctysize) / float(lcysize)) * (ymaxarr - yminarr))
+
+    # read landcover array
+    print "Warping and storing landcover and bathy data..."
+    print("LC extents: %s" % str(lcextents))
+    print("LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
+    tifds = gdal.Open(lctif, GA_ReadOnly)
+    tifband = tifds.GetRasterBand(1)
+    values = tifband.ReadAsArray(lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr)
+    tifnodata = tifband.GetNoDataValue()  #nodata is treated as water, which is 11
+    if (tifnodata == None):
+        tifnodata = 0
+    values[values == tifnodata] = 11
+    values = values.flatten()
+    tifband = None
+    tifds = None
+
+    # 2. a new array of original scale coordinates must be created
+    #    The following two lines should work fine still because x and y are offset into the array
+    tifxrange = [tifgeotrans[0] + tifgeotrans[1] * x for x in xrange(lcxminarr, lcxmaxarr)]
+    tifyrange = [tifgeotrans[3] + tifgeotrans[5] * y for y in xrange(lcyminarr, lcymaxarr)]
+    coords = numpy.array([(x, y) for y in tifyrange for x in tifxrange])
+
+    # 3. a new array of goal scale coordinates must be made
+    # landcover extents are used for the bathy depth array
+    # yes, it's confusing.  sorry.
+    depthxlen = int((lcextents['xmax']-lcextents['xmin'])/self.scale)
+    depthylen = int((lcextents['ymax']-lcextents['ymin'])/self.scale)
+    depthxrange = [lcextents['xmin'] + self.scale * x for x in xrange(depthxlen)]
+    depthyrange = [lcextents['ymax'] - self.scale * y for y in xrange(depthylen)]
+    depthbase = numpy.array([(x, y) for y in depthyrange for x in depthxrange])
+
+    # 4. an inverse distance tree must be built from that
+    lcCLIDT = CLIDT(coords, values, depthbase, wantCL=wantCL)
+
+    # 5. the desired output comes from that inverse distance tree
+    deptharray = lcCLIDT()
+    deptharray.resize((depthylen, depthxlen))
+    lcCLIDT = None
+
+    # 6. Finish and store the band
+    lcarray = deptharray[self.maxdepth:-1*self.maxdepth, self.maxdepth:-1*self.maxdepth]
+    geotrans = [ lcextents['xmin'], self.scale, 0, lcextents['ymax'], 0, -1 * self.scale ]
+    projection = srs.ExportToWkt()
+    bathyarray = getBathy(deptharray, self.maxdepth, geotrans, projection)
+    mapds.GetRasterBand(Region.rasters['bathy']).WriteArray(bathyarray)
+
+    # perform terrain translation
+    # NB: figure out why this doesn't work up above
+    lcpid = self.lclayer[:3]
+    if lcpid in Terrain.translate:
+        trans = Terrain.translate[lcpid]
+        for key in trans:
+            lcarray[lcarray == key] = trans[key]
+        for value in numpy.unique(lcarray).flat:
+            if value not in Terrain.terdict:
+                print "bad value: ", value
+    print lcarray.shape
+    mapds.GetRasterBand(Region.rasters['landcover']).WriteArray(lcarray)
+
+    # read and store ortho arrays
+    tifds = gdal.Open(oifile, GA_ReadOnly)
+    for band in xrange(1,5):		# That is, [1 2 3 4]
+        print "Cropping and storing ortho data (%s band)..." % "-rgba"[band]
+        tifband = tifds.GetRasterBand(band)
+        #values = tifband.ReadAsArray(oixminarr, oiyminarr, (oixmaxarr - oixminarr), (oiymaxarr - oiyminarr))
+        values = tifband.ReadAsArray(offsetx, offsety, sizex, sizey)
+        tifnodata = tifband.GetNoDataValue()
+        if (tifnodata == None):
+            tifnodata = 0
+        values[values == tifnodata] = -1    #Signal missing
+        tifband = None
+
+        print values.shape
+        mapds.GetRasterBand(band+Region.rasters['orthor']-1).WriteArray(values)
+        values = None
+    tifds = None
+
+    # close the dataset and append it to the tile list
+    mapds = None
+    return tilename
 
