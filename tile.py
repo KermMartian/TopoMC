@@ -41,10 +41,22 @@ class Tile:
 
         # create the tile directory if necessary
         self.tiledir = os.path.join(region.regiondir, 'Tiles', '%dx%d' % (self.tilex, self.tiley))
-        cleanmkdir(self.tiledir)
+        self.skip = False
+        if os.path.isfile(os.path.join(self.tiledir, 'Tile.yaml')):
+            self.skip = True
+        else:
+            cleanmkdir(self.tiledir)
 
     def __call__(self):
         """Actually build the Minecraft world that corresponds to a tile."""
+
+        if self.skip == True:
+            print("Skipping extant tile %dx%d" % (self.tilex, self.tiley))
+            self.world = mclevel.MCInfdevOldLevel(self.tiledir)
+            peak = self.world.playerSpawnPosition()
+            self.peak = peak[1] - 2
+            del self.world
+            return self.peak
 
         # calculate offsets
         ox = (self.tilex-self.tiles['xmin'])*self.size
@@ -101,6 +113,13 @@ class Tile:
         # now that terrain and trees are done, place ore
         if self.doOre:
             Ore.placeoreintile(self)
+
+        # replace all 'end stone' with stone
+        EndStoneID = self.world.materials["End Stone"].ID
+        StoneID = self.world.materials["Stone"].ID
+        for xpos, zpos in self.world.allChunks:
+            chunk = self.world.getChunk(xpos, zpos)
+            chunk.Blocks[chunk.Blocks == EndStoneID] = StoneID
 
         # stick the player and the spawn at the peak
         setspawnandsave(self.world, self.peak)

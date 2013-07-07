@@ -20,6 +20,8 @@ def buildtile(args):
     """Given a region name and coordinates, build the corresponding tile."""
     # this should work for single and multi threaded cases
     (name, tilex, tiley) = args
+    print("Building tile (%d,%d) of map %s..." % \
+          (tilex, tiley, name))
     yamlfile = file(os.path.join('Regions', name, 'Region.yaml'))
     myRegion = yaml.load(yamlfile)
     yamlfile.close()
@@ -88,6 +90,12 @@ def main():
     print "Merging %d tiles into one world..." % len(tiles)
     for tile in tiles:
         (name, x, y) = tile
+        if not(os.path.isfile(os.path.join(tiledir, 'Tile.yaml'))):
+            print("The following tile is missing. Please re-run this script:\n%s" % \
+                  os.path.join(tiledir, 'Tile.yaml'))
+            raise IOError
+    for tile in tiles:
+        (name, x, y) = tile
         tiledir = os.path.join('Regions', name, 'Tiles', '%dx%d' % (x, y))
         tilefile = file(os.path.join(tiledir, 'Tile.yaml'))
         newtile = yaml.load(tilefile)
@@ -111,14 +119,6 @@ def main():
     if myRegion.doOre:
         print "Depositing %d ores at the region level..." % sum([len(ores[oretype]) for oretype in ores])
         Ore.placeoreinregion(ores, oreobjs, world)
-
-    # replace all 'end stone' with stone
-    print "Replacing all 'end stone' with stone..."
-    EndStoneID = world.materials["End Stone"].ID
-    StoneID = world.materials["Stone"].ID
-    for xpos, zpos in world.allChunks:
-        chunk = world.getChunk(xpos, zpos)
-        chunk.Blocks[chunk.Blocks == EndStoneID] = StoneID
 
     # tie up loose ends
     world.setPlayerGameType(1)
