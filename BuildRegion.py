@@ -90,6 +90,7 @@ def main():
     print "Merging %d tiles into one world..." % len(tiles)
     for tile in tiles:
         (name, x, y) = tile
+        tiledir = os.path.join('Regions', name, 'Tiles', '%dx%d' % (x, y))
         if not(os.path.isfile(os.path.join(tiledir, 'Tile.yaml'))):
             print("The following tile is missing. Please re-run this script:\n%s" % \
                   os.path.join(tiledir, 'Tile.yaml'))
