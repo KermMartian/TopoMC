@@ -35,6 +35,7 @@ def main():
     else:
         command = '../c10t/build/c10t -M 2048 -z -w Worlds/%s -o Maps/%s.png --center %d,%d' % (args.name, args.name, centerx, centerz)
 
+    print("$ %s" % command)
     os.system(command)
 
 if __name__ == '__main__':

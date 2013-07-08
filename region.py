@@ -45,8 +45,9 @@ class Region:
 
     # coordinate systems
     wgs84 = 4326
-    albers = 102039
-    t_srs = "+proj=aea +datum=NAD83 +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +units=m"
+    utm = 32618
+    t_srs = "+proj=utm +datum=WGS84 +zone=18 +units=m"
+    #t_srs = "+proj=aea +datum=NAD83 +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +units=m"
 
     # raster layer order
     rasters = {'landcover': 1, 'elevation': 2, 'bathy': 3, 'crust': 4, 'orthor': 5, 'orthog': 6, 'orthob': 7, 'orthoir': 8}
@@ -179,13 +180,13 @@ class Region:
         Convre = "<X Coordinate>(.*?)</X Coordinate > <Y Coordinate>(.*?)</Y Coordinate >"
 
         # convert from WGS84 to Albers
-        ULdict = {'X_Value': self.llextents['xmin'], 'Y_Value': self.llextents['ymin'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.albers}
+        ULdict = {'X_Value': self.llextents['xmin'], 'Y_Value': self.llextents['ymin'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.utm}
         (ULx, ULy) = re.findall(Convre, clientConv.service.getCoordinates(**ULdict))[0]
-        URdict = {'X_Value': self.llextents['xmax'], 'Y_Value': self.llextents['ymin'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.albers}
+        URdict = {'X_Value': self.llextents['xmax'], 'Y_Value': self.llextents['ymin'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.utm}
         (URx, URy) = re.findall(Convre, clientConv.service.getCoordinates(**URdict))[0]
-        LLdict = {'X_Value': self.llextents['xmin'], 'Y_Value': self.llextents['ymax'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.albers}
+        LLdict = {'X_Value': self.llextents['xmin'], 'Y_Value': self.llextents['ymax'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.utm}
         (LLx, LLy) = re.findall(Convre, clientConv.service.getCoordinates(**LLdict))[0]
-        LRdict = {'X_Value': self.llextents['xmax'], 'Y_Value': self.llextents['ymax'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.albers}
+        LRdict = {'X_Value': self.llextents['xmax'], 'Y_Value': self.llextents['ymax'], 'Current_Coordinate_System': Region.wgs84, 'Target_Coordinate_System': Region.utm}
         (LRx, LRy) = re.findall(Convre, clientConv.service.getCoordinates(**LRdict))[0]
 
         # select maximum values for landcover extents
@@ -200,35 +201,35 @@ class Region:
         realsize = self.scale * self.tilesize
         self.tiles = { 'xmax': int(ceil(mxmax / realsize)), 'xmin': int(floor(mxmin / realsize)), 'ymax': int(ceil(mymax / realsize)), 'ymin': int(floor(mymin / realsize)) }
 
-        self.albersextents = { 'ortho': dict(), 'landcover': dict(), 'elevation': dict() }
+        self.utmextents = { 'ortho': dict(), 'landcover': dict(), 'elevation': dict() }
         self.wgs84extents = { 'ortho': dict(), 'landcover': dict(), 'elevation': dict() }
 
         # landcover has a maxdepth-sized border
-        self.albersextents['elevation'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
+        self.utmextents['elevation'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
         borderwidth = self.maxdepth * self.scale
-        self.albersextents['landcover'] = { 'xmax': self.albersextents['elevation']['xmax'] + borderwidth, 'xmin': self.albersextents['elevation']['xmin'] - borderwidth, 'ymax': self.albersextents['elevation']['ymax'] + borderwidth, 'ymin': self.albersextents['elevation']['ymin'] - borderwidth }
-        self.albersextents['ortho'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
+        self.utmextents['landcover'] = { 'xmax': self.utmextents['elevation']['xmax'] + borderwidth, 'xmin': self.utmextents['elevation']['xmin'] - borderwidth, 'ymax': self.utmextents['elevation']['ymax'] + borderwidth, 'ymin': self.utmextents['elevation']['ymin'] - borderwidth }
+        self.utmextents['ortho'] = { 'xmax': self.tiles['xmax'] * realsize, 'xmin': self.tiles['xmin'] * realsize, 'ymax': self.tiles['ymax'] * realsize, 'ymin': self.tiles['ymin'] * realsize }
 
         # now convert back from Albers to WGS84
         for maptype in ['ortho', 'landcover', 'elevation']:
-            ULdict = {'X_Value': self.albersextents[maptype]['xmin'], \
-                      'Y_Value': self.albersextents[maptype]['ymin'], \
-                      'Current_Coordinate_System': Region.albers, \
+            ULdict = {'X_Value': self.utmextents[maptype]['xmin'], \
+                      'Y_Value': self.utmextents[maptype]['ymin'], \
+                      'Current_Coordinate_System': Region.utm, \
                       'Target_Coordinate_System': Region.wgs84}
             (ULx, ULy) = re.findall(Convre, clientConv.service.getCoordinates(**ULdict))[0]
-            URdict = {'X_Value': self.albersextents[maptype]['xmax'], \
-                      'Y_Value': self.albersextents[maptype]['ymin'], \
-                      'Current_Coordinate_System': Region.albers, \
+            URdict = {'X_Value': self.utmextents[maptype]['xmax'], \
+                      'Y_Value': self.utmextents[maptype]['ymin'], \
+                      'Current_Coordinate_System': Region.utm, \
                       'Target_Coordinate_System': Region.wgs84}
             (URx, URy) = re.findall(Convre, clientConv.service.getCoordinates(**URdict))[0]
-            LLdict = {'X_Value': self.albersextents[maptype]['xmin'], \
-                      'Y_Value': self.albersextents[maptype]['ymax'], \
-                      'Current_Coordinate_System': Region.albers, \
+            LLdict = {'X_Value': self.utmextents[maptype]['xmin'], \
+                      'Y_Value': self.utmextents[maptype]['ymax'], \
+                      'Current_Coordinate_System': Region.utm, \
                       'Target_Coordinate_System': Region.wgs84}
             (LLx, LLy) = re.findall(Convre, clientConv.service.getCoordinates(**LLdict))[0]
-            LRdict = {'X_Value': self.albersextents[maptype]['xmax'], \
-                      'Y_Value': self.albersextents[maptype]['ymax'], \
-                      'Current_Coordinate_System': Region.albers, \
+            LRdict = {'X_Value': self.utmextents[maptype]['xmax'], \
+                      'Y_Value': self.utmextents[maptype]['ymax'], \
+                      'Current_Coordinate_System': Region.utm, \
                       'Target_Coordinate_System': Region.wgs84}
             (LRx, LRy) = re.findall(Convre, clientConv.service.getCoordinates(**LRdict))[0]
 
@@ -617,7 +618,7 @@ class Region:
         print "First-pass warp and store over elevation data..."
         eltif = os.path.join(self.mapsdir, '%s.tif' % (self.ellayer)) 
         elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
-        elextents = self.albersextents['elevation']
+        elextents = self.utmextents['elevation']
         warpcmd = 'gdalwarp -q -multi -t_srs "%s" -tr %d %d -te %d %d %d %d' \
                   ' -r cubic "%s" "%s" -srcnodata "-340282346638529993179660072199368212480.000" ' \
                   '-dstnodata 0' % (Region.t_srs, self.scale, self.scale, \
@@ -636,7 +637,7 @@ class Region:
         print "First-pass warp and store over orthoimagery data..."
         oitif = os.path.join(self.mapsdir, '%s.tif' % (self.oilayer)) 
         oifile = os.path.join(self.mapsdir, '%s-new.tif' % (self.oilayer))
-        oiextents = self.albersextents['ortho']
+        oiextents = self.utmextents['ortho']
         warpcmd = 'gdalwarp -q -multi -t_srs "%s" -tr %d %d -te %d %d %d %d' \
                   ' -r cubic "%s" "%s" -srcnodata "-340282346638529993179660072199368212480.000" ' \
                   '-dstnodata 0' % (Region.t_srs, self.scale, self.scale, \
@@ -705,7 +706,7 @@ class Region:
         tifds = gdal.Open(lctif, GA_ReadOnly)
         tifgeotrans = tifds.GetGeoTransform()
         tifds = None
-        lcextentsWhole = self.albersextents['landcover']
+        lcextentsWhole = self.utmextents['landcover']
         xminarr = (lcextentsWhole['xmin']-tifgeotrans[0])/tifgeotrans[1]
         xmaxarr = (lcextentsWhole['xmax']-tifgeotrans[0])/tifgeotrans[1]
         yminarr = (lcextentsWhole['ymax']-tifgeotrans[3])/tifgeotrans[5]
@@ -714,15 +715,19 @@ class Region:
         print("Landcover extents are %s -> %s" % (str(lcextentsWhole), str([xminarr, xmaxarr, yminarr, ymaxarr])))
 
         tiftiles = []
-
+        overlap = Region.prepTileSizeOverlap - Region.prepTileSize
+        elxsizetile = elxsize if (elxsize % Region.prepTileSize) > overlap else \
+                      elxsize - overlap
+        elysizetile = elysize if (elysize % Region.prepTileSize) > overlap else \
+                      elysize - overlap
         print("Processing %d x %d data array as tiles." % (elxsize, elysize))
         tiles = [(self.name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) \
                  for (tilex, tiley) in \
-                 product(xrange(int(ceil(float(elxsize)/Region.prepTileSize))), \
-                         xrange(int(ceil(float(elysize)/Region.prepTileSize))))]
+                 product(xrange(int(ceil(float(elxsizetile)/Region.prepTileSize))), \
+                         xrange(int(ceil(float(elysizetile)/Region.prepTileSize))))]
 
         if single:
-            tiftiles = [self.buildmaptile(tile) for tile in tiles]
+            tiftiles = [buildmaptile(tile) for tile in tiles]
         else:
             # multi-process ... let's see...
             pool = Pool()
@@ -785,7 +790,7 @@ def buildmaptile(args):
     srs.ImportFromProj4(Region.t_srs)
     driver = gdal.GetDriverByName("GTiff")
     lctif = os.path.join(self.mapsdir, '%s.tif' % (self.lclayer)) 
-    lcextentsWhole = self.albersextents['landcover']
+    lcextentsWhole = self.utmextents['landcover']
     elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
     oifile = os.path.join(self.mapsdir, '%s-new.tif' % (self.oilayer))
 
