@@ -20,6 +20,9 @@ def setspawnandsave(world, point):
     spawn = point
     spawn[1] += 2
     world.setPlayerSpawnPosition(tuple(spawn))
+    save(world)
+
+def save(world):
     sizeOnDisk = 0
     # NB: numchunks is calculable = (region.tilesize/chunkWidth)*(region.tilesize/chunkWidth)
     numchunks = 0
