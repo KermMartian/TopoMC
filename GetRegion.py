@@ -5,6 +5,7 @@ logging.basicConfig(level=logging.WARNING)
 from region import Region
 import sys
 import argparse
+from klogger import klogger, klog_levels
 
 def checkOrthoIDs(string):
     """Checks to see if the given product IDs are valid."""
@@ -61,18 +62,27 @@ def main():
     parser.add_argument('--landcoverIDs', default=default_landcoverIDs, type=checkLandcoverIDs, help='ordered list of product IDs (default %s)' % default_landcoverIDs)
     parser.add_argument('--enable-ore', action='store_true', dest='doOre', default=False, help='enable ore generation')
     parser.add_argument('--enable-schematics', action='store_true', dest='doSchematics', default=False, help='enable schematic usage')
-    parser.add_argument('--debug', action='store_true', help='enable debug output')
+    parser.add_argument("-v", "--verbosity", action="count", \
+                        help="increase output verbosity")
+    parser.add_argument("-q", "--quiet", action="store_true", \
+                        help="suppress informational output")
     args = parser.parse_args()
 
-    # enable debug
-    if (args.debug):
-        logging.getLogger('suds.client').setLevel(logging.DEBUG)
+    # set up logging
+    log_level = klog_levels.LOG_INFO
+    if args.quiet:
+        log_level = klog_levels.LOG_ERROR
+    if args.verbosity:
+        # v=1 is DEBUG 1, v=2 is DEBUG 2, and so on
+        log_level += args.verbosity
+    log = klogger(log_level)
 
     # create the region
-    print "Creating new region %s..." % args.name
+    log.log_info("Creating new region %s..." % args.name)
     myRegion = Region(name=args.name, xmax=args.xmax, xmin=args.xmin, ymax=args.ymax, ymin=args.ymin, scale=args.scale, vscale=args.vscale, trim=args.trim, tilesize=args.tilesize, sealevel=args.sealevel, maxdepth=args.maxdepth, oiIDs=args.orthoIDs, lcIDs=args.landcoverIDs, elIDs=args.elevationIDs, doOre=args.doOre, doSchematics=args.doSchematics)
 
-    print "Retrieving files..."
+    log.log_info("Retrieving files...")
+    myRegion.log = log
     myRegion.getfiles()
 
 if __name__ == '__main__':

@@ -29,6 +29,7 @@ def buildtile(args):
     myRegion = yaml.load(yamlfile)
     yamlfile.close()
     myTile = Tile(myRegion, tilex, tiley)
+    myTile.log = log
     myTile()
 
 def buildregion(args):

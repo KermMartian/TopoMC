@@ -51,7 +51,7 @@ class Tile:
         """Actually build the Minecraft world that corresponds to a tile."""
 
         if self.skip == True:
-            print("Skipping extant tile %dx%d" % (self.tilex, self.tiley))
+            self.log.log_info("Skipping extant tile %dx%d" % (self.tilex, self.tiley))
             self.world = mclevel.MCInfdevOldLevel(self.tiledir)
             peak = self.world.playerSpawnPosition()
             self.peak = peak[1] - 2

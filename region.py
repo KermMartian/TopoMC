@@ -361,10 +361,11 @@ class Region:
         
                     if layerID in self.seamlessIDs:
                         response = clientRequest.service.processAOI2(xmlString)
-                        print("Requested URLs for seamless layer ID %s (aka %s)..." % (layerID, fullLayerID))
+                        self.log.log_debug(1,"Requested URLs for seamless layer ID %s (aka %s)..." % \
+                                           (layerID, fullLayerID))
                     else:
                         response = clientRequest.service.getTiledDataDirectURLs2(xmlString)
-                        print("Requested URLs for tiled layer ID %s..." % layerID)
+                        self.log.log_debug(1,"Requested URLs for tiled layer ID %s..." % layerID)
         
                     # I am still a bad man.
                     downloadURLs += [x.rsplit("</DOWNLOAD_URL>")[0] for x in response.split("<DOWNLOAD_URL>")[1:]]
@@ -372,11 +373,11 @@ class Region:
                         if "<ERROR>" in response and "area of interest" in response:
                             # AOI was too large. Try again.
                             divisions += 1
-                            print("Warning: USGS server indicated AOI was too large. Trying again with %d pieces" % (divisions**2))
+                            self.log.log_warn("USGS server indicated AOI was too large. " \
+                                              "Trying again with %d pieces" % (divisions**2))
                             break
                         else: 
-                            print("ERROR: No downloadURLs, and unknown error! Response was:\n%s" % response)
-                            raise IOError
+                            self.log.log_fatal("No downloadURLs, and unknown error! Response was:\n%s" % response)
                     retry = False
 
             retval[layerID] = downloadURLs
@@ -401,7 +402,7 @@ class Region:
 
     def retrievefile(self, layerID, downloadURL):
         """Retrieve the datafile associated with the URL.  This may require downloading it from the USGS servers or extracting it from a local archive."""
-        print "Attempting to retrieve %s..." % downloadURL
+        self.log.log_info("Attempting to retrieve %s..." % downloadURL)
         fname = Region.getfn(downloadURL)
         layerdir = os.path.join(Region.downloadtop, layerID)
         if not os.path.exists(layerdir):
@@ -432,9 +433,9 @@ class Region:
                 existSize = 0
             webPage = opener.open(req)
             if maxSize == existSize:
-                print "Using cached file for layerID %s" % layerID
+                self.log.log_debug(1,"Using cached file for layerID %s" % layerID)
             else:
-                print "Downloading file from server for layerID %s" % layerID
+                self.log.log_debug(1,"Downloading file from server for layerID %s" % layerID)
                 pbar = ProgressBar(widgets=[Percentage(), ' ', Bar(), ' ', ETA(), ' ', FileTransferSpeed()], maxval=maxSize).start()
                 # This chunk size may be small!
                 max_chunk_size = 8192
@@ -470,7 +471,7 @@ class Region:
             if os.path.exists(downloadfile):
                 existSize = os.path.getsize(downloadfile)
             else:
-                print("  Requesting download for %s." % layerID)
+                self.log.log_debug(1,"  Requesting download for %s." % layerID)
                 # initiateDownload and get the response code
                 # put _this_ in its own function!
                 try:
@@ -495,7 +496,7 @@ class Region:
                         startPos = result.find("<ns:return>") + 11
                         endPos = result.find("</ns:return>")
                         requestID = result[startPos:endPos]
-                print "  request ID is %s" % requestID
+                self.log.log_debug(2,"  request ID is %s" % requestID)
     
                 sleep(5)
                 while True:
@@ -507,7 +508,7 @@ class Region:
                     startPos = result.find("<ns:return>") + 11
                     endPos = result.find("</ns:return>")
                     (code, status) = result[startPos:endPos].split(',', 1)
-                    print "  status is %s" % status
+                    self.log.log_debug(2,"  status is %s" % status)
                     if (int(code) == 400):
                         break
                     sleep(15)
@@ -527,7 +528,7 @@ class Region:
                     else:
                         raise IOError
                 else:
-                    print "  downloading %s now!" % downloadfile
+                    self.log.log_debug(1,"  downloading %s now!" % downloadfile)
                     downloadFile = open(downloadfile, 'wb')
                     while True:
                         data = obj.read(8192)
@@ -569,7 +570,7 @@ class Region:
             extractfiles = ['.'.join([extracthead, suffix]) for suffix in 'tif', 'tfw']
         for extractfile in extractfiles:
             if os.path.exists(os.path.join(layerdir, extractfile)):
-                print "Using existing file %s for layerID %s" % (extractfile, layerID)
+                self.log.log_debug(1,"Using existing file %s for layerID %s" % (extractfile, layerID))
             else:
                 if downloadfile[-3:] == 'zip':
                     os.system('unzip "%s" "%s" -d "%s"' % (downloadfile, extractfile, layerdir))
@@ -578,7 +579,6 @@ class Region:
                     for fn in tf.getnames():
                         if fn[-3:] == 'tif':
                             tf.close()
-                            print('cd %s && tar --strip-components 1 -xzvf "%s" "%s"' % (layerdir, downloadfile, fn))
                             os.system('tar --strip-components 1 -xzvf "%s" "%s" -C "%s"' % (downloadfile, fn, layerdir))
                             os.system('mv %s %s/%s.tif' % (fn.split('/')[-1], layerdir, fname.split('.')[0]))
                             break
@@ -591,19 +591,17 @@ class Region:
         layerIDs = [self.oilayer, self.lclayer, self.ellayer]
         downloadURLs = self.requestvalidation(layerIDs)
         for layerID in downloadURLs.keys():
-            print "Downloading files for layer %s..." % layerID
+            self.log.log_info("Downloading files for layer %s..." % layerID)
             extractlist = []
             for downloadURL in downloadURLs[layerID]:
                 extractfile = self.retrievefile(layerID, downloadURL)
                 extractlist.append(extractfile)
             if len(extractlist) <= 0:
-                print("ERROR: Zero files found for layer %s!\n" % layerID)
-                raise IOError
+                self.log.log_error("Zero files found for layer %s!\n" % layerID)
             # Build VRTs
-            print "Building VRT file for layer %s (this may take some time)..." % layerID
+            self.log.log_info("Building VRT file for layer %s (this may take some time)..." % layerID)
             vrtfile = os.path.join(self.mapsdir, '%s.vrt' % layerID)
             buildvrtcmd = 'gdalbuildvrt "%s" %s' % (vrtfile, ' '.join(['"%s"' % os.path.abspath(extractfile) for extractfile in extractlist]))
-            print "$ "+buildvrtcmd
             os.system('%s' % buildvrtcmd)
             # Generate warped GeoTIFFs
             tiffile = os.path.join(self.mapsdir, '%s.tif' % layerID)
@@ -615,7 +613,7 @@ class Region:
 
         # warp elevation data into new format
         # NB: can't do this to landcover until mode algorithm is supported
-        print "First-pass warp and store over elevation data..."
+        self.log.log_info("First-pass warp and store over elevation data...")
         eltif = os.path.join(self.mapsdir, '%s.tif' % (self.ellayer)) 
         elfile = os.path.join(self.mapsdir, '%s-new.tif' % (self.ellayer))
         elextents = self.utmextents['elevation']
@@ -631,10 +629,10 @@ class Region:
             pass
         # NB: make this work on Windows too!
         os.system('%s' % warpcmd)
-        print "Completed first-pass warp over elevation data."
+        self.log.log_info("Completed first-pass warp over elevation data.")
 
         # Warp ortho data into new format
-        print "First-pass warp and store over orthoimagery data..."
+        self.log.log_info("First-pass warp and store over orthoimagery data...")
         oitif = os.path.join(self.mapsdir, '%s.tif' % (self.oilayer)) 
         oifile = os.path.join(self.mapsdir, '%s-new.tif' % (self.oilayer))
         oiextents = self.utmextents['ortho']
@@ -650,7 +648,7 @@ class Region:
             pass
         # NB: make this work on Windows too!
         os.system('%s' % warpcmd)
-        print "Completed first-pass warp over orthoimagery data."
+        self.log.log_info("Completed first-pass warp over orthoimagery data.")
     
         # First compute global elevation data
         elds = gdal.Open(elfile, GA_ReadOnly)
@@ -672,7 +670,8 @@ class Region:
         maxsealevel = Region.tileheight - Region.headroom
         oldsealevel = self.sealevel
         if (oldsealevel > maxsealevel or oldsealevel < minsealevel):
-            print "warning: sealevel value %d outside %d-%d range" % (oldsealevel, minsealevel, maxsealevel)
+            self.log.log_warn("sealevel value %d outside %d-%d range" % \
+                              (oldsealevel, minsealevel, maxsealevel))
         self.sealevel = int(min(max(oldsealevel, minsealevel), maxsealevel))
 
         # maxdepth depends upon sealevel
@@ -680,7 +679,8 @@ class Region:
         maxmaxdepth = self.sealevel - 1
         oldmaxdepth = self.maxdepth
         if (oldmaxdepth > maxmaxdepth or oldmaxdepth < minmaxdepth):
-            print "warning: maxdepth value %d outside %d-%d range" % (oldmaxdepth, minmaxdepth, maxmaxdepth)
+            self.log.log_warn("maxdepth value %d outside %d-%d range" % \
+                              (oldmaxdepth, minmaxdepth, maxmaxdepth))
         self.maxdepth = int(min(max(oldmaxdepth, minmaxdepth), maxmaxdepth))
 
         # trim depends upon elmin (if elmin < 0, trim == 0)
@@ -688,7 +688,8 @@ class Region:
         maxtrim = max(elmin, mintrim)
         oldtrim = self.trim
         if (oldtrim > maxtrim or oldtrim < mintrim):
-            print "warning: trim value %d outside %d-%d range" % (oldtrim, mintrim, maxtrim)
+            self.log.log_Warn("trim value %d outside %d-%d range" % \
+                              (oldtrim, mintrim, maxtrim))
         self.trim = int(min(max(oldtrim, mintrim), maxtrim))
 
         # vscale depends on sealevel, trim and elmax
@@ -698,7 +699,8 @@ class Region:
         minvscale = ceil(eltrimmed / elroom)
         oldvscale = self.vscale
         if (oldvscale < minvscale):
-            print "warning: vscale value %d smaller than minimum value %d" % (oldvscale, minvscale)
+            self.log.log_warn("vscale value %d smaller than minimum value %d" % \
+                              (oldvscale, minvscale))
         self.vscale = int(max(oldvscale, minvscale))
         # vscale/trim/maxdepth computation ends here
 
@@ -712,7 +714,8 @@ class Region:
         yminarr = (lcextentsWhole['ymax']-tifgeotrans[3])/tifgeotrans[5]
         ymaxarr = (lcextentsWhole['ymin']-tifgeotrans[3])/tifgeotrans[5]
         lcarr = [xminarr, xmaxarr, yminarr, ymaxarr]
-        print("Landcover extents are %s -> %s" % (str(lcextentsWhole), str([xminarr, xmaxarr, yminarr, ymaxarr])))
+        self.log.log_debug(2,"Landcover extents are %s -> %s" % \
+                           (str(lcextentsWhole), str([xminarr, xmaxarr, yminarr, ymaxarr])))
 
         tiftiles = []
         overlap = Region.prepTileSizeOverlap - Region.prepTileSize
@@ -720,8 +723,8 @@ class Region:
                       elxsize - overlap
         elysizetile = elysize if (elysize % Region.prepTileSize) > overlap else \
                       elysize - overlap
-        print("Processing %d x %d data array as tiles." % (elxsize, elysize))
-        tiles = [(self.name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) \
+        self.log.log_info("Processing %d x %d data array as tiles." % (elxsize, elysize))
+        tiles = [(self.log, self.name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) \
                  for (tilex, tiley) in \
                  product(xrange(int(ceil(float(elxsizetile)/Region.prepTileSize))), \
                          xrange(int(ceil(float(elysizetile)/Region.prepTileSize))))]
@@ -735,13 +738,13 @@ class Region:
             pool.close()
             while not(rs.ready()):
                 remaining = rs._number_left
-                print "Waiting for " + str(remaining) + " tasks to complete..."
+                self.log.log_info("Waiting for " + str(remaining) + " tasks to complete...")
                 time.sleep(10)
             pool.join()        # Just as a precaution.
             tiftiles = rs.get()
 
         # Now join everything together!
-        print("Joining %d files into final TIF image..." % len(tiftiles))
+        self.log.log_info("Joining %d files into final TIF image..." % len(tiftiles))
         mergecmd = 'gdal_merge.py -o "%s" "%s"' % (self.mapname, '" "'.join(tiftiles))
   
         try:
@@ -751,9 +754,9 @@ class Region:
         # NB: make this work on Windows too!
         os.system('%s' % mergecmd)
 
-        print("Merge complete! Removing tiles...")
+        self.log.log_info("Merge complete! Removing tiles...")
         [os.remove(tilename) for tilename in tiftiles]
-        print("Cleanup complete.")
+        self.log.log_info("Cleanup complete.")
 
     # Thanks to http://williams.best.vwh.net/avform.htm#LL
     # Takes a base (lat1, lon1) point and offsets by dist meters in the angle direction
@@ -764,7 +767,7 @@ class Region:
         b = 6356752.3 # Polar radius, meters
         earth_rad = math.sqrt( ((((a ** 2)*math.cos(lat1)) ** 2) + (((b ** 2)*math.sin(lat1)) ** 2))
                              / (((a*math.cos(lat1)) ** 2) + ((b*math.sin(lat1)) ** 2)))
-        print("earth rad %f at lat %f lon %f" % (earth_rad, lat1, lon1))
+        self.log.log_debug(2,"earth rad %f at lat %f lon %f" % (earth_rad, lat1, lon1))
         dist /= earth_rad
         lat = math.asin(math.sin(lat1) * math.cos(dist) + \
                         math.cos(lat1) * math.sin(dist) * math.cos(angle))
@@ -774,7 +777,7 @@ class Region:
 
 # Global scope
 def buildmaptile(args):
-    (name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) = args
+    (log, name, tilex, tiley, elxsize, elysize, lcarr, tifgeotrans, elgeoxform, wantCL) = args
     (xminarr, xmaxarr, yminarr, ymaxarr) = lcarr
 
     yamlfile = file(os.path.join('Regions', name, 'Region.yaml'))
@@ -797,8 +800,9 @@ def buildmaptile(args):
     # GeoTIFF Image Tile
     # eight bands: landcover, elevation, bathy, crust, oR, oG, oB, oA
     # data type is GDT_Int16 (elevation can be negative)
-    print("Creating output image tile %d, %d with offset (%d, %d) and size (%d, %d)" % \
-          (tilex, tiley, offsetx, offsety, sizex, sizey))
+    log.log_debug(1,"Creating output image tile %d, %d with offset " \
+                       "(%d, %d) and size (%d, %d)" % \
+                       (tilex, tiley, offsetx, offsety, sizex, sizey))
     tilename = os.path.join(self.regiondir, 'Tile_%04d_%04d.tif' % (tilex, tiley))
     mapds = driver.Create(tilename, sizex, sizey, len(Region.rasters), GDT_Int16)
     mapds.SetProjection(srs.ExportToWkt())
@@ -808,7 +812,7 @@ def buildmaptile(args):
     mapds.SetGeoTransform(geoxform)
 
     # modify elarray and save it as raster band 2
-    print "Adjusting and storing elevation to GeoTIFF..."
+    log.log_debug(2,"Adjusting and storing elevation to GeoTIFF...")
     elds = gdal.Open(elfile, GA_ReadOnly)
     elarray = elds.GetRasterBand(1).ReadAsArray(offsetx, offsety, sizex, sizey)
     elds = None
@@ -818,7 +822,7 @@ def buildmaptile(args):
     actualel = None
 
     # generate crust and save it as raster band 4
-    print "Adjusting and storing crust to GeoTIFF..."
+    log.log_debug(2,"Adjusting and storing crust to GeoTIFF...")
     newcrust = Crust(sizex, sizey, wantCL=wantCL)
     crustarray = newcrust()
     mapds.GetRasterBand(Region.rasters['crust']).WriteArray(crustarray)
@@ -852,9 +856,10 @@ def buildmaptile(args):
     lcymaxarr = int(yminarr + ((offsety + lctysize) / float(lcysize)) * (ymaxarr - yminarr))
 
     # read landcover array
-    print "Warping and storing landcover and bathy data..."
-    print("LC extents: %s" % str(lcextents))
-    print("LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
+    log.log_debug(2,"Warping and storing landcover and bathy data...")
+    log.log_debug(3,"LC extents: %s" % str(lcextents))
+    log.log_debug(3,"LC window: %s => %s" % (str([xminarr, xmaxarr, yminarr, ymaxarr]), \
+                       str([lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr])))
     tifds = gdal.Open(lctif, GA_ReadOnly)
     tifband = tifds.GetRasterBand(1)
     values = tifband.ReadAsArray(lcxminarr, lcyminarr, lcxmaxarr-lcxminarr, lcymaxarr-lcyminarr)
@@ -905,14 +910,13 @@ def buildmaptile(args):
             lcarray[lcarray == key] = trans[key]
         for value in numpy.unique(lcarray).flat:
             if value not in Terrain.terdict:
-                print "bad value: ", value
-    print lcarray.shape
+                self.warn("tile has bad value: " + str(value))
     mapds.GetRasterBand(Region.rasters['landcover']).WriteArray(lcarray)
 
     # read and store ortho arrays
     tifds = gdal.Open(oifile, GA_ReadOnly)
     for band in xrange(1,5):		# That is, [1 2 3 4]
-        print "Cropping and storing ortho data (%s band)..." % "-rgba"[band]
+        log.log_debug(2,"Cropping and storing ortho data (%s band)..." % "-rgba"[band])
         tifband = tifds.GetRasterBand(band)
         #values = tifband.ReadAsArray(oixminarr, oiyminarr, (oixmaxarr - oixminarr), (oiymaxarr - oiyminarr))
         values = tifband.ReadAsArray(offsetx, offsety, sizex, sizey)
@@ -922,7 +926,6 @@ def buildmaptile(args):
         values[values == tifnodata] = -1    #Signal missing
         tifband = None
 
-        print values.shape
         mapds.GetRasterBand(band+Region.rasters['orthor']-1).WriteArray(values)
         values = None
     tifds = None
