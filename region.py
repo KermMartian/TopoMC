@@ -20,6 +20,7 @@ from utils import cleanmkdir
 from itertools import product
 from terrain import Terrain
 from pymclevel import mclevel
+import utmll
 
 from osgeo import gdal, osr
 from osgeo.gdalconst import GDT_Int16, GA_ReadOnly
@@ -46,7 +47,7 @@ class Region:
     # coordinate systems
     wgs84 = 4326
     utm = 32618
-    t_srs = "+proj=utm +datum=WGS84 +zone=18 +units=m"
+    t_srs = "+proj=utm +datum=WGS84 +zone=%d +units=m"
     #t_srs = "+proj=aea +datum=NAD83 +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +units=m"
 
     # raster layer order
@@ -85,6 +86,13 @@ class Region:
         """Create a region based on lat-longs and other parameters."""
         # NB: smart people check names
         self.name = name
+
+        # Zone computation for UTM
+        lat_center = (ymax + ymin) / 2.
+        lon_center = (xmax + xmin) / 2.
+        zone_num = utmll.latlon_to_zone_number(lat_center, lon_center)
+        self.utm = utmll.latlon_to_zone_identifier(lat_center, lon_center)
+        self.t_srs = self.t_srs % zone_num
 
         # tile must be an even multiple of chunk width
         # chunkWidth not defined in pymclevel but is hardcoded everywhere
